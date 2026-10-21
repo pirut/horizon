@@ -14,7 +14,7 @@ use horizon_world::{
     registry::{BlockRegistry, BlockStateId},
     worldgen::{
         biome::BiomeId,
-        generator::{GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk},
+        generator::{GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk, StageTimings},
     },
 };
 use std::{
@@ -162,6 +162,27 @@ impl Accel {
         Ok(Chunk {
             proto: result.map_err(|e| e.to_string())?,
         })
+    }
+
+    /// Wall time spent in each stage so far, summed over the idle workers
+    /// (all of them, between calls to [`Accel::generate`]).
+    pub fn stage_timings(&self) -> StageTimings {
+        let mut sum = StageTimings::default();
+        for t in self
+            .workers
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|w| w.stage_timings())
+        {
+            sum.chunks += t.chunks;
+            sum.biomes += t.biomes;
+            sum.noise += t.noise;
+            sum.surface += t.surface;
+            sum.structures += t.structures;
+            sum.carvers += t.carvers;
+        }
+        sum
     }
 
     /// Writes every block, section by section from the bottom, each section
