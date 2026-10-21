@@ -96,12 +96,42 @@ It reads names only (the constant pool, the class header and annotations), and d
 Both need the player's own copy of Minecraft 26.3, which Horizon never downloads, so they run on a machine
 that has it.
 
+## What exists, and what it costs
+
+`crates/horizon-accel` puts Horizon's terrain generation behind a C ABI (a `cdylib`): open a dimension's
+generator over prepared resources, list its block states and biomes by name, take the game's ids for them,
+then generate chunks from any number of threads and copy out their blocks, quart biomes and post-processing
+marks. No panic crosses the boundary. `mods/horizon-accel` holds the Java side, which so far needs nothing
+from Minecraft: `HorizonAccel` (the FFM binding), `IdMap` (Horizon names to the game's ids) and `Swaps` (a
+swap is off when another mod's mixin is applied to its class, or when its inputs aren't supported). Its tests
+run with `python3 -m unittest tests.test_accel_java` when a Java 25 JDK is installed.
+
+The cost of crossing, from `CrossingBench` (`mods/horizon-accel/src/test`) on a 4-thread 2.8 GHz Xeon cloud
+VM, OpenJDK 25.0.2, release build, median of seven rounds:
+
+| | ns per call |
+|---|---:|
+| Java static call (baseline) | 0.3 |
+| FFM downcall, no-op | 11.9 |
+| FFM downcall, no-op, critical | 6.3 |
+| Rust reading a 4096-int section from a Java `int[]` (critical, no copy) | 818 |
+| Rust reading the same from a native segment | 800 |
+
+Copying out one chunk takes about 2 crossings per section, about 60 for a 384-block-tall chunk: **under
+1 µs**, against Horizon's measured 10 ms per chunk of terrain work on one thread (`noise-aquifer-benchmark.md`).
+So the crossing is not what decides this. Whether Rust's terrain generation beats HotSpot's is.
+
 ## Steps
 
 1. Scanner and this plan.
-2. Measure terrain generation in Rust against Java (benchmark 1). Stop here if Rust isn't clearly faster.
-3. `crates/horizon-accel` (cdylib, C ABI) and the Fabric mod's skeleton: load the library, map the registries,
-   detect conflicting mixins, and swap `fillFromNoise` for vanilla worldgen settings.
-4. A parity harness comparing a world generated with the mod with one generated without it, chunk for chunk,
+2. **Done:** the native library, the FFM binding, the id mapping and the conflict rule, with the crossing
+   measured.
+3. Measure terrain generation in Rust against Java (benchmark 1). This needs Minecraft 26.3: the cloud
+   machine this was built on can't reach Mojang's servers. Stop here if Rust isn't clearly faster.
+4. The Minecraft-facing part of the mod, which needs the game jar to compile: a mixin on
+   `NoiseBasedChunkGenerator` that, for vanilla noise settings, asks the library for the chunk and writes its
+   blocks, biomes, heightmaps and post-processing marks into the `ProtoChunk`; registry mapping through
+   `BlockStateParser` and the biome registry; and `Swaps` fed from Mixin's `ClassInfo`.
+5. A parity harness comparing a world generated with the mod with one generated without it, chunk for chunk,
    plus the whole-game benchmark.
-5. The next subsystem from the table, by measured gap.
+6. The next subsystem from the table, by measured gap.

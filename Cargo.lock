@@ -1382,6 +1382,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-accel"
+version = "0.1.0"
+dependencies = [
+ "horizon-core",
+ "horizon-world",
+]
+
+[[package]]
 name = "horizon-assets"
 version = "0.1.0"
 dependencies = [
