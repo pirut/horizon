@@ -27,7 +27,7 @@ public final class HorizonAccel {
     private static final ValueLayout PTR = ValueLayout.ADDRESS;
 
     final MethodHandle abi, noop, noopCritical, sum, error, open, close, stateCount, stateName,
-            biomeCount, biomeName, mapStates, mapBiomes, generate, chunkBounds, chunkBlocks, chunkBiomes,
+            biomeCount, biomeName, mapStates, mapBiomes, generate, chunkBounds, chunkBlocks, chunkSection, chunkBiomes,
             chunkPostprocessing, chunkFree;
 
     private HorizonAccel(SymbolLookup lookup) {
@@ -47,6 +47,8 @@ public final class HorizonAccel {
         generate = link(lookup, "horizon_accel_generate", FunctionDescriptor.of(PTR, PTR, I32, I32), false);
         chunkBounds = link(lookup, "horizon_accel_chunk_bounds", FunctionDescriptor.ofVoid(PTR, PTR, PTR), true);
         chunkBlocks = link(lookup, "horizon_accel_chunk_blocks", FunctionDescriptor.of(I32, PTR, PTR, PTR, SIZE), true);
+        chunkSection = link(lookup, "horizon_accel_chunk_section",
+                FunctionDescriptor.of(I32, PTR, PTR, I32, PTR, SIZE, PTR, SIZE, PTR), true);
         chunkBiomes = link(lookup, "horizon_accel_chunk_biomes", FunctionDescriptor.of(I32, PTR, PTR, PTR, SIZE), true);
         chunkPostprocessing = link(lookup, "horizon_accel_chunk_postprocessing",
                 FunctionDescriptor.of(SIZE, PTR, I32, PTR, SIZE), true);
@@ -123,9 +125,22 @@ public final class HorizonAccel {
                     return null;
                 });
                 int sections = bounds[1] / 16;
-                int[] blocks = new int[sections * 4096];
+                Section[] packed = new Section[sections];
+                int[] palette = new int[4096];
+                long[] words = new long[4096];
+                long[] sizes = new long[3];
+                for (int s = 0; s < sections; s++) {
+                    int section = s;
+                    int status = (int) call(() -> (int) chunkSection.invokeExact(handle, chunk, section,
+                            MemorySegment.ofArray(palette), (long) palette.length, MemorySegment.ofArray(words),
+                            (long) words.length, MemorySegment.ofArray(sizes)));
+                    if (status != 0) {
+                        throw new IllegalStateException(status == 1 ? "section larger than 4096 entries" : lastError());
+                    }
+                    packed[s] = new Section(java.util.Arrays.copyOf(palette, (int) sizes[0]),
+                            java.util.Arrays.copyOf(words, (int) sizes[1]), (int) sizes[2]);
+                }
                 int[] biomes = new int[sections * 64];
-                check((int) call(() -> (int) chunkBlocks.invokeExact(handle, chunk, MemorySegment.ofArray(blocks), (long) blocks.length)));
                 check((int) call(() -> (int) chunkBiomes.invokeExact(handle, chunk, MemorySegment.ofArray(biomes), (long) biomes.length)));
                 short[][] post = new short[sections][];
                 for (int s = 0; s < sections; s++) {
@@ -137,7 +152,7 @@ public final class HorizonAccel {
                         call(() -> (long) chunkPostprocessing.invokeExact(chunk, section, out, n));
                     }
                 }
-                return new Chunk(x, z, bounds[0], bounds[1], blocks, biomes, post);
+                return new Chunk(x, z, bounds[0], bounds[1], packed, biomes, post);
             } finally {
                 call(() -> {
                     chunkFree.invokeExact(chunk);
@@ -156,11 +171,39 @@ public final class HorizonAccel {
     }
 
     /**
-     * A generated chunk. {@code blocks} holds 4096 ids per section from the bottom, each section in vanilla's
-     * order ({@code y << 8 | z << 4 | x}); {@code biomes} 64 per section ({@code y << 4 | z << 2 | x});
-     * {@code postprocessing} each section's marked positions, packed as vanilla packs them.
+     * A generated chunk: its sections from the bottom; {@code biomes} 64 per section
+     * ({@code y << 4 | z << 2 | x}); {@code postprocessing} each section's marked positions, packed as vanilla
+     * packs them.
      */
-    public record Chunk(int x, int z, int minY, int height, int[] blocks, int[] biomes, short[][] postprocessing) {}
+    public record Chunk(int x, int z, int minY, int height, Section[] sections, int[] biomes, short[][] postprocessing) {
+        /** Every block as the game's ids, 4096 per section in vanilla's order ({@code y << 8 | z << 4 | x}). */
+        public int[] blocks() {
+            int[] blocks = new int[sections.length * 4096];
+            for (int s = 0; s < sections.length; s++) {
+                sections[s].unpack(blocks, s * 4096);
+            }
+            return blocks;
+        }
+    }
+
+    /**
+     * One section as vanilla's {@code PalettedContainer} stores it: a palette of the game's ids and indices
+     * packed into longs, {@code bits} each ({@code SimpleBitStorage}: no index spans two longs). No words
+     * (and 0 bits): every block is {@code palette[0]}.
+     */
+    public record Section(int[] palette, long[] words, int bits) {
+        public void unpack(int[] out, int offset) {
+            if (bits == 0) {
+                java.util.Arrays.fill(out, offset, offset + 4096, palette[0]);
+                return;
+            }
+            int perWord = 64 / bits;
+            long mask = (1L << bits) - 1;
+            for (int i = 0; i < 4096; i++) {
+                out[offset + i] = palette[(int) ((words[i / perWord] >>> (i % perWord * bits)) & mask)];
+            }
+        }
+    }
 
     /** Opens a generator over a prepared resources folder (its {@code facts.json} and {@code worldgen/}). */
     public Generator open(Path resources, long seed, String dimension, boolean structures) {

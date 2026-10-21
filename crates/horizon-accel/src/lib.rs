@@ -183,6 +183,14 @@ impl Accel {
         Ok(())
     }
 
+    /// A section palette as the caller's ids.
+    fn map_palette(&self, states: &[BlockStateId], out: &mut [i32]) {
+        let map = self.state_map.get();
+        for (out, &BlockStateId(id)) in out.iter_mut().zip(states) {
+            *out = map.map_or(id as i32, |m| m[id as usize]);
+        }
+    }
+
     /// Writes every quart biome, 64 per section from the bottom, in vanilla's
     /// order (`y << 4 | z << 2 | x`), as the caller's ids.
     pub fn biomes(&self, chunk: &Chunk, out: &mut [i32]) -> Result<(), String> {
@@ -435,6 +443,58 @@ pub unsafe extern "C" fn horizon_accel_chunk_blocks(
         let (accel, chunk, out) =
             unsafe { (&*accel, &*chunk, std::slice::from_raw_parts_mut(out, len)) };
         accel.blocks(chunk, out).map(|()| 0)
+    })
+}
+
+/// Copies section `section` in its packed form, which the Java side hands to
+/// vanilla's `PalettedContainer` as it is instead of setting 4096 blocks:
+/// the palette (as the caller's ids) into `palette`, the packed indices into
+/// `words` (vanilla's `SimpleBitStorage` layout, none for a section of one
+/// state). `sizes` receives both lengths. Returns 0 when both fit and were
+/// copied, 1 when a buffer is too small (nothing copied: retry with
+/// `sizes`), -1 on error. `sizes` gets the palette's length, the words'
+/// length and the bits per index (0 for a section of one state).
+///
+/// # Safety
+/// `accel` and `chunk` must be live, `palette` and `words` hold their caps,
+/// and `sizes` three writable `usize`s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn horizon_accel_chunk_section(
+    accel: *const Accel,
+    chunk: *const Chunk,
+    section: u32,
+    palette: *mut i32,
+    palette_cap: usize,
+    words: *mut i64,
+    words_cap: usize,
+    sizes: *mut usize,
+) -> i32 {
+    guard(-1, || {
+        // SAFETY: the caller passes live handles and valid buffers.
+        let (accel, chunk, sizes) =
+            unsafe { (&*accel, &*chunk, std::slice::from_raw_parts_mut(sizes, 3)) };
+        let data = chunk
+            .proto
+            .terrain
+            .section(section as usize)
+            .ok_or_else(|| format!("no section {section}"))?;
+        let (states, packed) = data.packed();
+        (sizes[0], sizes[1], sizes[2]) = (states.len(), packed.len(), data.bits() as usize);
+        if states.len() > palette_cap || packed.len() > words_cap {
+            return Ok(1);
+        }
+        // SAFETY: both fit their buffers, checked above.
+        let (palette, words) = unsafe {
+            (
+                std::slice::from_raw_parts_mut(palette, states.len()),
+                std::slice::from_raw_parts_mut(words, packed.len()),
+            )
+        };
+        accel.map_palette(states, palette);
+        for (out, &word) in words.iter_mut().zip(packed) {
+            *out = word as i64;
+        }
+        Ok(0)
     })
 }
 

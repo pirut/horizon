@@ -100,8 +100,10 @@ that has it.
 
 `crates/horizon-accel` puts Horizon's terrain generation behind a C ABI (a `cdylib`): open a dimension's
 generator over prepared resources, list its block states and biomes by name, take the game's ids for them,
-then generate chunks from any number of threads and copy out their blocks, quart biomes and post-processing
-marks. No panic crosses the boundary. `mods/horizon-accel` holds the Java side, which so far needs nothing
+then generate chunks from any number of threads and copy out their sections, quart biomes and post-processing
+marks. Sections come out packed as vanilla's `PalettedContainer` stores them (a palette of the game's ids and
+`SimpleBitStorage` words), so the Java side can hand them to the chunk as they are instead of setting 98,304
+blocks one at a time. No panic crosses the boundary. `mods/horizon-accel` holds the Java side, which so far needs nothing
 from Minecraft: `HorizonAccel` (the FFM binding), `IdMap` (Horizon names to the game's ids) and `Swaps` (a
 swap is off when another mod's mixin is applied to its class, or when its inputs aren't supported). Its tests
 run with `python3 -m unittest tests.test_accel_java` when a Java 25 JDK is installed.
@@ -117,7 +119,7 @@ VM, OpenJDK 25.0.2, release build, median of seven rounds:
 | Rust reading a 4096-int section from a Java `int[]` (critical, no copy) | 818 |
 | Rust reading the same from a native segment | 800 |
 
-Copying out one chunk takes about 2 crossings per section, about 60 for a 384-block-tall chunk: **under
+Copying out one chunk takes about 2 crossings per section (its blocks and its post-processing marks), about 60 for a 384-block-tall chunk: **under
 1 µs**, against Horizon's measured 10 ms per chunk of terrain work on one thread (`noise-aquifer-benchmark.md`).
 So the crossing is not what decides this. Whether Rust's terrain generation beats HotSpot's is.
 

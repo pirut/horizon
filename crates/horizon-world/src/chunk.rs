@@ -438,6 +438,15 @@ impl<'r> BlockSection<'r> {
     pub fn bits(&self) -> u8 {
         self.storage.as_ref().map_or(0, PackedStorage::bits)
     }
+    /// The palette and its packed indices, laid out as a save stores them
+    /// (vanilla's `PalettedContainer`): no words when the section holds one
+    /// state. The palette may keep slots no index uses.
+    pub fn packed(&self) -> (&[BlockStateId], &[u64]) {
+        (
+            &self.palette,
+            self.storage.as_ref().map_or(&[], PackedStorage::words),
+        )
+    }
     pub fn get(&self, index: usize) -> io::Result<BlockStateId> {
         if index >= 4096 {
             return Err(invalid("section index out of bounds"));
@@ -687,6 +696,24 @@ mod tests {
             ("defaults", Tag::Compound(defaults)),
         ]);
         BlockRegistry::from_nbt(&tag).unwrap()
+    }
+
+    /// `packed` unpacks, with vanilla's layout, to what `get` reads.
+    #[test]
+    fn packed_matches_get() {
+        let registry = benchmark_registry(40);
+        let mut section = BlockSection::uniform(BlockStateId(3), &registry).unwrap();
+        assert_eq!(section.packed(), (&[BlockStateId(3)][..], &[][..]));
+        for i in 0..4096 {
+            section.set(i, BlockStateId((i * 7 % 40) as u32)).unwrap();
+        }
+        let (palette, words) = section.packed();
+        let bits = section.bits() as usize;
+        let per_word = 64 / bits;
+        for i in 0..4096 {
+            let local = (words[i / per_word] >> (i % per_word * bits)) & ((1 << bits) - 1);
+            assert_eq!(palette[local as usize], section.get(i).unwrap());
+        }
     }
 
     /// The optimized `set`/`get` must agree with the pre-optimization ones on
