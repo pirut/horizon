@@ -1207,7 +1207,11 @@ impl PlacementContext for World<'_> {
         }
         for cx in x0 >> 4..=x1 >> 4 {
             for cz in z0 >> 4..=z1 >> 4 {
-                if !self.region.chunk(cx, cz).is_ok_and(|c| c.heightmap(kind).is_some()) {
+                if !self
+                    .region
+                    .chunk(cx, cz)
+                    .is_ok_and(|c| c.heightmap(kind).is_some())
+                {
                     return Ok(None);
                 }
             }

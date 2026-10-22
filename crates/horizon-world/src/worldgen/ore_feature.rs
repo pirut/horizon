@@ -181,7 +181,12 @@ impl OreFeature {
         let size_xz = 2 * (spread_ceil + max_radius);
         let size_y = 2 * (2 + max_radius);
         if let Some(found) = world
-            .any_height_at_least(HeightmapType::OceanFloorWg, [x_start, z_start], size_xz, y_start)
+            .any_height_at_least(
+                HeightmapType::OceanFloorWg,
+                [x_start, z_start],
+                size_xz,
+                y_start,
+            )
             .map_err(FeatureExecutionError::Query)?
         {
             return match found {
@@ -297,7 +302,8 @@ impl OreFeature {
                                 * i64::from(size_xz)
                                 * i64::from(size_y);
                         // The sphere bounds keep indices inside the native BitSet.
-                        let Some(index) = usize::try_from(index).ok().filter(|&i| i < tested_len) else {
+                        let Some(index) = usize::try_from(index).ok().filter(|&i| i < tested_len)
+                        else {
                             return Err(FeatureExecutionError::WorkLimit);
                         };
                         let (word, bit) = (&mut tested[index / 64], 1u64 << (index % 64));

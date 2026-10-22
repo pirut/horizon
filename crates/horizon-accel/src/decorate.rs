@@ -29,7 +29,6 @@
 //! repeat yet (raw chunk writes) or a feature Horizon could not
 //! run makes the result unsupported: Java then decorates with vanilla.
 use crate::Accel;
-use std::collections::HashMap;
 use horizon_core::position::ChunkPos;
 use horizon_world::{
     chunk::BlockSection,
@@ -39,6 +38,7 @@ use horizon_world::{
     registry::BlockStateId,
     worldgen::generator::{DecorationOp, ProtoChunk},
 };
+use std::collections::HashMap;
 
 pub const RECORD: usize = 7;
 
@@ -63,7 +63,11 @@ struct Reader<'a, T> {
 }
 impl<'a, T: Copy> Reader<'a, T> {
     fn take(&mut self, n: usize) -> Result<&'a [T], String> {
-        let end = self.at.checked_add(n).filter(|&e| e <= self.data.len()).ok_or("region input too short")?;
+        let end = self
+            .at
+            .checked_add(n)
+            .filter(|&e| e <= self.data.len())
+            .ok_or("region input too short")?;
         let slice = &self.data[self.at..end];
         self.at = end;
         Ok(slice)
@@ -102,7 +106,14 @@ impl ChunkCache {
             return;
         }
         self.clock += 1;
-        self.chunks.insert(token, Cached { proto, uses, stamp: self.clock });
+        self.chunks.insert(
+            token,
+            Cached {
+                proto,
+                uses,
+                stamp: self.clock,
+            },
+        );
         if self.chunks.len() > CACHE_CHUNKS {
             let mut stamps: Vec<_> = self.chunks.values().map(|c| c.stamp).collect();
             stamps.sort_unstable();
@@ -119,15 +130,28 @@ impl ChunkCache {
 impl Accel {
     /// Keeps a chunk Java just filled from [`Accel::generate`], with the
     /// heightmaps Java's copy has (`mask` and `words` as in decoration input).
-    pub fn keep(&self, chunk: crate::Chunk, token: u64, mask: i32, words: &[i64]) -> Result<(), String> {
+    pub fn keep(
+        &self,
+        chunk: crate::Chunk,
+        token: u64,
+        mask: i32,
+        words: &[i64],
+    ) -> Result<(), String> {
         let mut proto = chunk.proto;
         proto.terrain.clear_heightmaps();
         let words_per_map = heightmap_words(self.generator.level_range().1);
         let mut words = Reader { data: words, at: 0 };
         for (bit, kind) in HeightmapType::ALL.into_iter().enumerate() {
             if mask & (1 << bit) != 0 {
-                let raw: Vec<u64> = words.take(words_per_map)?.iter().map(|&w| w as u64).collect();
-                proto.terrain.set_heightmap_raw(kind, &raw).map_err(|e| e.to_string())?;
+                let raw: Vec<u64> = words
+                    .take(words_per_map)?
+                    .iter()
+                    .map(|&w| w as u64)
+                    .collect();
+                proto
+                    .terrain
+                    .set_heightmap_raw(kind, &raw)
+                    .map_err(|e| e.to_string())?;
             }
         }
         self.cache.lock().unwrap().put(token, proto, 0);
@@ -149,7 +173,13 @@ impl Accel {
         }))
     }
 
-    pub fn decorate(&self, cx: i32, cz: i32, ints: &[i32], longs: &[i64]) -> Result<Decoration, String> {
+    pub fn decorate(
+        &self,
+        cx: i32,
+        cz: i32,
+        ints: &[i32],
+        longs: &[i64],
+    ) -> Result<Decoration, String> {
         let inverse = self.inverse_states()?;
         let map = self.state_map.get().ok_or("states are not mapped")?;
         let registry = self.generator.data().registry();
@@ -159,7 +189,8 @@ impl Accel {
         let mut uses = [0u8; 9];
         let result = (|| {
             let clock = std::time::Instant::now();
-            let (mut ints, mut longs) = (Reader { data: ints, at: 0 }, Reader { data: longs, at: 0 });
+            let (mut ints, mut longs) =
+                (Reader { data: ints, at: 0 }, Reader { data: longs, at: 0 });
             let height = self.generator.level_range().1;
             let sections = (height / 16) as usize;
             let heightmap_words = heightmap_words(height);
@@ -185,13 +216,15 @@ impl Accel {
                 for (bit, kind) in HeightmapType::ALL.into_iter().enumerate() {
                     if mask & (1 << bit) != 0 {
                         let words = longs.take(heightmap_words)?;
-                        heightmaps.push((kind, words.iter().map(|&w| w as u64).collect::<Vec<_>>()));
+                        heightmaps
+                            .push((kind, words.iter().map(|&w| w as u64).collect::<Vec<_>>()));
                     }
                 }
                 let mut blocks = Vec::with_capacity(sections);
                 let mut palette = Vec::new();
                 for _ in 0..sections {
-                    let (len, bits, count) = (ints.one()? as usize, ints.one()?, ints.one()? as usize);
+                    let (len, bits, count) =
+                        (ints.one()? as usize, ints.one()?, ints.one()? as usize);
                     palette.clear();
                     for &java in ints.take(len)? {
                         let horizon = inverse.get(java as usize).copied().unwrap_or(-1);
@@ -202,11 +235,15 @@ impl Accel {
                     }
                     let words: Vec<u64> = longs.take(count)?.iter().map(|&w| w as u64).collect();
                     blocks.push(
-                        BlockSection::from_packed(&palette, bits as u8, &words, registry).map_err(|e| e.to_string())?,
+                        BlockSection::from_packed(&palette, bits as u8, &words, registry)
+                            .map_err(|e| e.to_string())?,
                     );
                 }
-                let heightmaps: Vec<_> = heightmaps.iter().map(|(k, w)| (*k, w.as_slice())).collect();
-                let mut chunk = worker.proto_from_sections(pos, blocks, &heightmaps, i == 4).map_err(|e| e.to_string())?;
+                let heightmaps: Vec<_> =
+                    heightmaps.iter().map(|(k, w)| (*k, w.as_slice())).collect();
+                let mut chunk = worker
+                    .proto_from_sections(pos, blocks, &heightmaps, i == 4)
+                    .map_err(|e| e.to_string())?;
                 if decorated {
                     chunk.set_decorated();
                 }
@@ -215,7 +252,9 @@ impl Accel {
             let mut region: [ProtoChunk; 9] = region.try_into().map_err(|_| "region")?;
             let copy_nanos = clock.elapsed().as_nanos() as u64;
             let clock = std::time::Instant::now();
-            let (stats, log) = worker.decorate_logged(&mut region).map_err(|e| e.to_string())?;
+            let (stats, log) = worker
+                .decorate_logged(&mut region)
+                .map_err(|e| e.to_string())?;
             if stats.unsupported + stats.failed == 0 {
                 let mut cache = self.cache.lock().unwrap();
                 for (i, chunk) in region.into_iter().enumerate() {
@@ -229,14 +268,18 @@ impl Accel {
                 ..Decoration::default()
             };
             let binary = |out: &mut Decoration, nbt: Compound| -> Result<(i32, i32), String> {
-                let bytes = nbt::write_network(&Tag::Compound(nbt), nbt::Limits::default()).map_err(|e| format!("{e:?}"))?;
+                let bytes = nbt::write_network(&Tag::Compound(nbt), nbt::Limits::default())
+                    .map_err(|e| format!("{e:?}"))?;
                 let start = out.strings.len() as i32;
                 out.strings.extend_from_slice(&bytes);
                 Ok((start, bytes.len() as i32))
             };
             let debug = std::env::var_os("HORIZON_ACCEL_DEBUG").is_some();
             if debug && out.unsupported > 0 {
-                eprintln!("horizon-accel: decorate {cx} {cz}: {} features failed or unsupported", out.unsupported);
+                eprintln!(
+                    "horizon-accel: decorate {cx} {cz}: {} features failed or unsupported",
+                    out.unsupported
+                );
             }
             let java = |s: BlockStateId| map[s.0 as usize];
             let string = |out: &mut Decoration, s: &str| {
@@ -251,7 +294,8 @@ impl Accel {
                     DecorationOp::SetSectionBlock([x, y, z], s) => [3, x, y, z, java(s), 0, 0],
                     DecorationOp::BlockTick([x, y, z], s, delay) => [4, x, y, z, java(s), delay, 0],
                     DecorationOp::FluidTick([x, y, z], fluid, delay) => {
-                        let kind = FluidKind::ALL.iter().position(|f| *f == fluid).unwrap_or(0) as i32;
+                        let kind =
+                            FluidKind::ALL.iter().position(|f| *f == fluid).unwrap_or(0) as i32;
                         [5, x, y, z, kind, delay, 0]
                     }
                     DecorationOp::PostProcess([x, y, z]) => [6, x, y, z, 0, 0, 0],
@@ -264,7 +308,10 @@ impl Accel {
                         [8, x, y, z, a, (seed >> 32) as i32, seed as i32]
                     }
                     DecorationOp::PrimeHeightmap([x, z], kind) => {
-                        let kind = HeightmapType::ALL.iter().position(|k| *k == kind).unwrap_or(0) as i32;
+                        let kind = HeightmapType::ALL
+                            .iter()
+                            .position(|k| *k == kind)
+                            .unwrap_or(0) as i32;
                         [9, x, 0, z, kind, 0, 0]
                     }
                     DecorationOp::BlockEntity([x, y, z], nbt) => {
@@ -294,7 +341,12 @@ impl Accel {
             other => {
                 let mut cache = self.cache.lock().unwrap();
                 tokens.iter().for_each(|&t| cache.forget(t));
-                other.map(|out| out.unwrap_or(Decoration { missing: 1, ..Decoration::default() }))
+                other.map(|out| {
+                    out.unwrap_or(Decoration {
+                        missing: 1,
+                        ..Decoration::default()
+                    })
+                })
             }
         }
     }

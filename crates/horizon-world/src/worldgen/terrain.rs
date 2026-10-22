@@ -393,7 +393,11 @@ impl<'r, B: TerrainBlockStates> TerrainChunk<'r, B> {
     }
     /// Replace a whole section (as copied from another chunk representation).
     /// Heightmaps are not updated; prime them afterwards.
-    pub fn set_section(&mut self, index: usize, section: BlockSection<'r>) -> Result<(), TerrainError> {
+    pub fn set_section(
+        &mut self,
+        index: usize,
+        section: BlockSection<'r>,
+    ) -> Result<(), TerrainError> {
         if index >= self.blocks.sections.len() {
             return Err(TerrainError::OutsideBuildHeight);
         }

@@ -175,6 +175,21 @@ C2ME it wins: pregen of 4,225 chunks at 89.2 and 89.9 chunks/s with features on 
 fast path and a bitset in ore placement, and a `BiomeTemperature` cache that no longer pre-zeroes 38M
 instructions' worth of memory.
 
+**Tried and dropped: biomes from Horizon's terrain run.** With features on, a C2ME + horizon-accel server still
+spends 6 % of its Java CPU in vanilla's `createBiomes` (climate search), and 29 % saving chunks, 12 % on light.
+Generating the chunk at the BIOMES status instead of TERRAIN, writing its biomes through vanilla's own
+`fillBiomesFromNoise` and holding the rest for TERRAIN, was exact (seven seeds, values and palette order) but
+slower: 83.7 and 79.6 chunks/s against 86.2 and 85.6 without it. BIOMES runs one chunk further out than TERRAIN,
+so the ring of chunks that only reach BIOMES got a full Rust terrain run, and the heavy work moved to a status the
+scheduler doesn't spread as well.
+
+**Palette packing for chunk saves** (`FastPack`, a mixin on `PalettedContainer.pack`, on by default; off with
+`-Dhorizon.accel.serialization=false` or when another mod patches `pack`, as Lithium does). Every save packs each
+section's block and biome containers; vanilla looks every entry up in a fresh hash palette, and for the many
+one-value sections fills and scans 4,096 entries. `FastPack` maps old palette ids to new ones through an array and
+packs one-value containers directly. The output is vanilla's exactly (palette order, bits, words; checked on every
+section in `fparity`). Pregen with C2ME: 90.2 and 88.5 chunks/s against 85.1 and 86.5 without it (+3 to 4 %).
+
 ## What exists, and what it costs
 
 `crates/horizon-accel` puts Horizon's terrain generation behind a C ABI (a `cdylib`): open a dimension's
