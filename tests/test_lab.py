@@ -174,9 +174,11 @@ class PublicationTests(unittest.TestCase):
             self.assertTrue(check_public_tree.prohibited(path), path)
         for path in ["tools/lab.py", "crates/voxel-kernels/src/lib.rs", "Cargo.lock", "docs/analysis.md",
                      "mods/horizon/src/main/java/dev/horizonlab/HorizonLab.java",
-                     "mods/horizon-lab/src/main/java/dev/horizonlab/HorizonLab.java"]:
+                     "mods/horizon-lab/src/main/java/dev/horizonlab/HorizonLab.java",
+                     "mods/horizon-accel/src/main/java/dev/horizonlab/accel/HorizonAccel.java"]:
             self.assertFalse(check_public_tree.prohibited(path), path)
         self.assertTrue(check_public_tree.prohibited("mods/horizon/src/main/java/net/minecraft/Client.java"))
+        self.assertTrue(check_public_tree.prohibited("mods/horizon-accel/src/main/java/net/minecraft/Client.java"))
         for path in ["tools/JfrSummary.java", "tests/java/JfrFixture.java"]:
             self.assertFalse(check_public_tree.prohibited(path), path)
         for path in ["tools/Minecraft.java", "tests/java/Client.java", ".local/tools/JfrSummary.java"]:

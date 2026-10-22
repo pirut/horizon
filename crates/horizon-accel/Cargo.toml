@@ -1,0 +1,17 @@
+[package]
+name = "horizon-accel"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Horizon's world generation behind a C ABI, for the horizon-accel Fabric mod (docs/research/java-bridge.md)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+horizon-core = { path = "../horizon-core" }
+horizon-world = { path = "../horizon-world" }
+
+[lints]
+workspace = true

@@ -19,18 +19,22 @@
 //! - `report <work>`: the coverage report, per mod ported, partial, not yet
 //!   or not needed with the reason, in `<work>/coverage.json` and
 //!   `coverage.md`.
+//! - `reach <jar or folder> <work>`: what each jar's code names in
+//!   Minecraft, Fabric API and its mixins, and the most needed names over
+//!   all of them, in `<work>/reach.json` and `reach.md`
+//!   (`docs/research/java-bridge.md`).
 //! - `port <pack> <work> [--from <folder>] [--resources <prepared>]`: every
 //!   step for the portable mods, as the launcher's "Import modpack" runs it.
 //!
 //! The work folder belongs to the user: jars and carried-over files stay
 //! there and are never uploaded or committed.
-use horizon_port_pack::{fetch, inventory::Record, pipeline};
+use horizon_port_pack::{fetch, inventory::Record, pipeline, reach};
 use std::{
     path::{Path, PathBuf},
     process::ExitCode,
 };
 
-const USAGE: &str = "usage: horizon-port-pack import <pack> <work> | inventory <work> [--offline] | fetch <work> [--from <folder>] [<mod id>...] | carry <work> [--resources <prepared>] [<mod id>...] | report <work> | port <pack> <work> [--from <folder>] [--resources <prepared>]";
+const USAGE: &str = "usage: horizon-port-pack import <pack> <work> | inventory <work> [--offline] | fetch <work> [--from <folder>] [<mod id>...] | carry <work> [--resources <prepared>] [<mod id>...] | report <work> | reach <jar or folder> <work> | port <pack> <work> [--from <folder>] [--resources <prepared>]";
 
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -64,6 +68,19 @@ fn main() -> ExitCode {
                 let work = path(1)?;
                 pipeline::report(work, log)?;
                 println!("{}", work.join("coverage.md").display());
+                Ok(())
+            }
+            Some("reach") => {
+                let (jars, work) = (path(1)?, path(2)?);
+                let mods = reach::read_all(jars)?;
+                let summary = reach::summarize(&mods);
+                std::fs::create_dir_all(work).map_err(|e| format!("{}: {e}", work.display()))?;
+                let json = serde_json::json!({ "mods": mods, "summary": summary });
+                pipeline::write_json(&work.join("reach.json"), &json)?;
+                let md = work.join("reach.md");
+                std::fs::write(&md, reach::markdown(&mods, &summary))
+                    .map_err(|e| format!("{}: {e}", md.display()))?;
+                println!("{}", md.display());
                 Ok(())
             }
             Some("port") => {

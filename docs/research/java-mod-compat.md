@@ -7,6 +7,9 @@ change that for more than a handful of mods. What carries over is the
 and the *ideas* (native Horizon ports of the mods people use most, written
 with [Horizon's own mod system](../mods.md)). This page is the reasoning.
 
+> **Update:** this fork takes another route to Java mods: it runs them on the player's own Minecraft with
+> Fabric, as usual, and swaps vanilla's slowest parts for Horizon's Rust code. See [java-bridge.md](java-bridge.md).
+
 ## How Java mods work
 
 ### Fabric
