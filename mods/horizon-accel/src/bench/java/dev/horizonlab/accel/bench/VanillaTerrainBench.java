@@ -498,6 +498,8 @@ public final class VanillaTerrainBench {
         // HORIZON_ACCEL_MODE=fparity: rounds in pairs over the same square, vanilla's terrain and decoration, then
         // the swaps' (terrain swap parity is checked separately), compared.
         boolean fparity = mode.equals("fparity");
+        // HORIZON_BENCH_BIOMES=0: the swap rounds keep vanilla's biomes.
+        boolean biomeSwap = !"0".equals(System.getenv("HORIZON_BENCH_BIOMES"));
         Map<Long, ProtoChunk> vanillaRun = new HashMap<>();
         long fallbacks = 0;
         for (int round = 0; round < warmup + rounds; round++) {
@@ -529,7 +531,11 @@ public final class VanillaTerrainBench {
             long biomes = timed(pool, threads, x0 - 1 - m, z0 - 1 - m, x1 + 1 + m, z1 + 1 + m, (x, z) -> {
                 var chunk = chunkAt.apply(x, z);
                 var region = regionFor.apply(ChunkStatus.BIOMES, chunk);
-                generator.createBiomes(randomState, Blender.empty(), BenchLevel.structures.forWorldGenRegion(region), chunk).join();
+                if (swap != null && (mode.equals("swap") || swapFeatures) && biomeSwap) {
+                    swap.biomes(chunk);
+                } else {
+                    generator.createBiomes(randomState, Blender.empty(), BenchLevel.structures.forWorldGenRegion(region), chunk).join();
+                }
                 chunk.setPersistedStatus(ChunkStatus.BIOMES);
             });
             long terrain = timed(pool, threads, x0 - m, z0 - m, x1 + m, z1 + m, (x, z) -> {

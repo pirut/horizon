@@ -183,6 +183,14 @@ slower: 83.7 and 79.6 chunks/s against 86.2 and 85.6 without it. BIOMES runs one
 so the ring of chunks that only reach BIOMES got a full Rust terrain run, and the heavy work moved to a status the
 scheduler doesn't spread as well.
 
+**Biomes from Horizon's biome stage alone** (`TerrainSwap.biomes`, a mixin on `ChunkGenerator.createBiomes`, on by
+default; off with `-Dhorizon.accel.biomes=false`). Instead of the whole terrain run, BIOMES now calls only Horizon's
+biome stage, writes the result through vanilla's `fillBiomesFromNoise`, and leaves it in Horizon's biome cache, where
+the chunk's terrain run (which reads the 3×3 around it) finds it instead of sampling again. Exact on three seeds
+(values and palette order). In process, 4 threads: biomes 0.33 and 0.37 ms/chunk against vanilla's 0.40 and 0.45,
+and terrain 4.43 and 4.67 against 4.92 and 4.75. Pregen with C2ME: 81.6, 92.0 and 89.9 chunks/s against 89.6,
+85.5 and 81.6 (about +2.5 %, inside the noise of a single pair).
+
 **Palette packing for chunk saves** (`FastPack`, a mixin on `PalettedContainer.pack`, on by default; off with
 `-Dhorizon.accel.serialization=false` or when another mod patches `pack`, as Lithium does). Every save packs each
 section's block and biome containers; vanilla looks every entry up in a fresh hash palette, and for the many

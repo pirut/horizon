@@ -21,6 +21,7 @@ import net.minecraft.world.level.StructureManager;
 import net.minecraft.world.level.biome.MultiNoiseBiomeSource;
 import net.minecraft.world.level.biome.MultiNoiseBiomeSourceParameterLists;
 import net.minecraft.world.level.biome.TheEndBiomeSource;
+import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator;
 import net.minecraft.world.level.levelgen.NoiseGeneratorSettings;
@@ -36,7 +37,8 @@ import org.slf4j.Logger;
  * <p>Settings are system properties: {@code horizon.accel.library}, the {@code libhorizon_accel} file;
  * {@code horizon.accel.resources}, the resources {@code horizon-prepare} made from the same game version;
  * {@code horizon.accel.terrain=false} turns the terrain swap off, and with it the features swap;
- * {@code horizon.accel.features=false} turns only the features swap off.
+ * {@code horizon.accel.features=false} turns only the features swap off, {@code horizon.accel.biomes=false} only the
+ * biomes swap.
  */
 public final class AccelMod implements ModInitializer {
     static final Logger LOG = LogUtils.getLogger();
@@ -50,6 +52,10 @@ public final class AccelMod implements ModInitializer {
             "net/minecraft/world/level/chunk/ChunkGenerator", Set.of("applyBiomeDecoration",
                     "lambda$applyBiomeDecoration$0", "lambda$applyBiomeDecoration$1", "lambda$applyBiomeDecoration$2",
                     "lambda$applyBiomeDecoration$3", "lambda$applyBiomeDecoration$4", "lambda$applyBiomeDecoration$5"));
+    /** createBiomes and the work it runs. */
+    static final Swaps.Swap BIOMES = new Swaps.Swap("biomes",
+            "net/minecraft/world/level/chunk/ChunkGenerator", Set.of("createBiomes", "lambda$createBiomes$0",
+                    "doCreateBiomes"));
     /**
      * Mixins on those methods that change how the work runs but never its result: C2ME pools the surface rule's
      * buffers and picks the executor terrain runs on.
@@ -66,6 +72,9 @@ public final class AccelMod implements ModInitializer {
     private static final Set<ResourceKey<Level>> DECIDED = new HashSet<>();
     private static volatile Swaps.Decision terrain;
     private static volatile Swaps.Decision features;
+    private static volatile Swaps.Decision biomes;
+    /** Each generator Horizon generates terrain for, once decided. */
+    private static final Map<ChunkGenerator, TerrainSwap> BY_GENERATOR = new java.util.IdentityHashMap<>();
 
     @Override
     public void onInitialize() {
@@ -99,7 +108,11 @@ public final class AccelMod implements ModInitializer {
         ResourceKey<Level> dimension = region.getLevel().dimension();
         synchronized (SWAPS) {
             if (DECIDED.add(dimension)) {
-                SWAPS.put(dimension, decide(generator, settings, region, dimension, structures.shouldGenerateStructures()));
+                TerrainSwap swap = decide(generator, settings, region, dimension, structures.shouldGenerateStructures());
+                SWAPS.put(dimension, swap);
+                if (swap != null) {
+                    BY_GENERATOR.put(generator, swap);
+                }
             }
             return SWAPS.get(dimension);
         }
@@ -132,6 +145,39 @@ public final class AccelMod implements ModInitializer {
             }
         }
         return features.on() ? swap.features() : null;
+    }
+
+    /**
+     * Horizon's terrain run for this chunk's biomes, or null to run vanilla's: only once Horizon generates this
+     * generator's terrain (decided at the first chunk's terrain), for a new chunk with nothing to blend, and when no
+     * other mod patches {@code createBiomes}. Called on worldgen threads.
+     */
+    public static TerrainSwap biomesFor(ChunkGenerator generator, Blender blender, ChunkAccess chunk) {
+        if (library == null || blender != Blender.empty() || chunk.getBelowZeroRetrogen() != null) {
+            return null;
+        }
+        TerrainSwap swap;
+        synchronized (SWAPS) {
+            swap = BY_GENERATOR.get(generator);
+        }
+        if (swap == null) {
+            return null;
+        }
+        if (biomes == null) {
+            synchronized (SWAPS) {
+                if (biomes == null) {
+                    var decision = Swaps.decide(BIOMES, MixinTargets.of(BIOMES.targetClass()), "dev.horizonlab.accel.",
+                            Set.of(), Map.of());
+                    if (!Boolean.parseBoolean(System.getProperty("horizon.accel.biomes", "true"))) {
+                        decision = new Swaps.Decision(BIOMES, List.of("horizon.accel.biomes=false"));
+                    }
+                    LOG.info("horizon-accel: {}", decision.on() ? "Horizon makes biomes where it generates terrain"
+                            : "vanilla makes biomes: " + String.join("; ", decision.reasons()));
+                    biomes = decision;
+                }
+            }
+        }
+        return biomes.on() ? swap : null;
     }
 
     private static TerrainSwap decide(NoiseBasedChunkGenerator generator, Holder<NoiseGeneratorSettings> settings,
