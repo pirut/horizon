@@ -138,9 +138,21 @@ Saved worlds can't show parity directly: vanilla's own features (ore blobs, seag
 run to run, so two vanilla worlds share only 454 of 1,089 chunks exactly, and vanilla against horizon-accel
 424. The block-for-block check is the in-process parity mode above.
 
-What would help next, by size: faster noise and surface in Horizon itself (Perlin sampling is over half of
-Horizon's terrain time, bound by table lookups rather than arithmetic: neither a branch-free `floor` nor an
-AVX2 build gained 2 %), then the features status.
+**After the Perlin and climate-search speedups** (pirut/horizon#4, same results): Horizon's terrain is 12.4
+ms/chunk on 1 thread (was 14.5) and its biomes 1.06 (was 1.20). In a later pregen: vanilla 48.1 chunks/s,
+horizon-accel 54.7 (+14 %), C2ME + horizon-accel 77.0. Without C2ME the CPU is only 45 to 90 % busy during
+pregen, so vanilla's chunk scheduling, not terrain, caps the server; faster Rust terrain mostly shows under
+C2ME.
+
+**Where C2ME + horizon-accel spends its worker CPU** (JFR, 9,100 samples): features 32 % (sculk patches 12 %,
+ores 8 %, trees 2 %), Horizon's terrain over FFM 15 %, C2ME's scheduler 13 %, saving 15 %, light 6 %, Java
+biomes 3 %. Features are now the largest part.
+
+**Features, Java against Rust** (one thread, the same 8×8 squares; `VanillaTerrainBench` with
+`HORIZON_BENCH_FEATURES=1`, `decorate_bench`): vanilla 4.1 and 5.8 ms/chunk, Horizon 2.3 and 2.2 (2× to
+2.6×). Horizon decorates its own chunks with every feature supported. A features swap would have to copy the
+3×3 region into Rust (about 1 ms) and replay Rust's writes through Java's `setBlock` so block entities, ticks
+and post-processing stay exact.
 
 ## What exists, and what it costs
 
