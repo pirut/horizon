@@ -3,7 +3,6 @@ package dev.horizonlab.accel.mc;
 import com.mojang.logging.LogUtils;
 import dev.horizonlab.accel.HorizonAccel;
 import dev.horizonlab.accel.Swaps;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -12,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
@@ -34,8 +34,9 @@ import org.slf4j.Logger;
  * when no other mod patches {@code NoiseBasedChunkGenerator}. Anything else keeps vanilla's Java code, and the
  * log says why, once.
  *
- * <p>Settings are system properties: {@code horizon.accel.library}, the {@code libhorizon_accel} file;
- * {@code horizon.accel.resources}, the resources {@code horizon-prepare} made from the same game version;
+ * <p>Settings are system properties: {@code horizon.accel.library}, the {@code libhorizon_accel} file (by default the
+ * one this jar carries for the running platform, see {@link Natives}); {@code horizon.accel.resources}, the resources
+ * {@code horizon-prepare} made from the same game version (by default {@code <game dir>/horizon-accel/resources});
  * {@code horizon.accel.terrain=false} turns the terrain swap off, and with it the features and zlib swaps;
  * {@code horizon.accel.features=false} turns only the features swap off, {@code horizon.accel.biomes=false} only the
  * biomes swap, and {@code horizon.accel.zlib=false} the zlib swap for chunk saves and packets ({@link FastZlib}).
@@ -82,17 +83,24 @@ public final class AccelMod implements ModInitializer {
             LOG.info("horizon-accel: terrain swap off (horizon.accel.terrain=false)");
             return;
         }
-        String lib = System.getProperty("horizon.accel.library");
-        String res = System.getProperty("horizon.accel.resources");
-        if (lib == null || res == null || !Files.isRegularFile(Path.of(lib)) || !Files.isDirectory(Path.of(res))) {
-            LOG.warn("horizon-accel: off. Set -Dhorizon.accel.library=<libhorizon_accel> and "
-                    + "-Dhorizon.accel.resources=<horizon-prepare resources>");
+        Path home = FabricLoader.getInstance().getGameDir().resolve("horizon-accel");
+        Path lib;
+        Path res;
+        try {
+            lib = Natives.library(System.getProperty("horizon.accel.library"), home);
+            res = Natives.resources(System.getProperty("horizon.accel.resources"), home);
+        } catch (java.io.IOException e) {
+            LOG.error("horizon-accel: off, the library couldn't be unpacked", e);
+            return;
+        }
+        if (lib == null || res == null) {
+            LOG.warn("horizon-accel: off. {}", Natives.missing(lib, res, home));
             return;
         }
         try {
-            library = HorizonAccel.load(Path.of(lib));
-            resources = Path.of(res);
-            LOG.info("horizon-accel: loaded {}", lib);
+            library = HorizonAccel.load(lib);
+            resources = res;
+            LOG.info("horizon-accel: loaded {} with resources {}", lib, res);
         } catch (RuntimeException | UnsatisfiedLinkError e) {
             LOG.error("horizon-accel: off, the library didn't load", e);
         }
