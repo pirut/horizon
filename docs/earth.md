@@ -59,6 +59,22 @@ surveys (3DEP, HRDEM, RGE ALTI, GSI, REMA, Copernicus fill), tile seam mending, 
 coast, lake and ground special cases. Each comes over as its own change, measured against Earth Platform's
 `CubicBench` fingerprints and timings.
 
+## Playing it today
+
+Create New World, World tab, World Type: **Earth** makes an Earth world at Earth Platform's home in Yosemite
+Valley; `horizon-client --world NAME --earth LAT,LON` makes one anywhere (a new world only). The world's
+generator is `horizon:earth` in `world_gen_settings`, with its latitude, longitude and `shift`. Earth Platform's
+`earthplatform/cache` folder in the game folder is read and filled, so the two share downloads.
+
+Until the cubic engine below lands, chunks are still vanilla's 384 blocks tall. An Earth world keeps the true
+heights and shows a 384-block window of them: when the world is made, `shift` (the Earth Y of world Y 0, a whole
+number of cubes) is set so the spawn's ground stands near Y 16, leaving about 300 blocks of climb before the
+window's top. Ground above the window is cut flat at Y 319. Far terrain (`crate::lod`) has no such limit and
+draws every mountain at its real height, read a grid at a time from `Earth::region`.
+
+`crates/horizon-client/src/earthgen.rs` is the generator: each section is a cube from `horizon_earth::cube`, with
+a bedrock floor at Y -64. Caves, trees and the rest of the decoration come with stage 8.
+
 ## Next: the cubic engine
 
 Horizon's world today is vanilla's: chunk columns of 24 sections from Y -64 to 320 (`crate::chunk::HEIGHT`),

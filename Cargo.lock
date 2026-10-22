@@ -1432,6 +1432,7 @@ dependencies = [
  "horizon-bench",
  "horizon-core",
  "horizon-dualsense",
+ "horizon-earth",
  "horizon-friends",
  "horizon-mods",
  "horizon-protocol",

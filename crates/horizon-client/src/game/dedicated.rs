@@ -351,6 +351,7 @@ impl Game<'_> {
         };
         let options = horizon_client::save::WorldGen {
             flat,
+            earth: None,
             structures: props.generate_structures,
             bonus_chest: false,
         };

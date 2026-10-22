@@ -13,6 +13,8 @@ horizon-core = { path = "../horizon-core" }
 # The server thread ahead of the workers (MinecraftServer.spin's Thread.setPriority).
 horizon-threads = { path = "../horizon-threads" }
 horizon-world = { path = "../horizon-world" }
+# Earth worlds: the real planet from open data (docs/earth.md).
+horizon-earth = { path = "../horizon-earth" }
 horizon-protocol = { path = "../horizon-protocol" }
 # server.properties, eula.txt and the user lists, shared with horizon-server.
 horizon-server-files = { path = "../horizon-server-files" }

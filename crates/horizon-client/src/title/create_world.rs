@@ -32,6 +32,8 @@ pub struct WorldOptions {
     pub commands: Option<bool>,
     /// The Superflat world preset instead of Default.
     pub flat: bool,
+    /// An Earth world (docs/earth.md) instead of either, at Earth Platform's home.
+    pub earth: bool,
     pub structures: bool,
     pub bonus_chest: bool,
 }
@@ -43,6 +45,7 @@ impl Default for WorldOptions {
             difficulty: 2,
             commands: None,
             flat: false,
+            earth: false,
             structures: true,
             bonus_chest: false,
         }
@@ -64,6 +67,7 @@ impl WorldOptions {
                 .unwrap_or(2),
             commands: Some(commands),
             flat: generation.flat,
+            earth: generation.earth.is_some(),
             structures: generation.structures,
             bonus_chest: generation.bonus_chest,
             ..Self::default()
@@ -84,6 +88,8 @@ impl WorldOptions {
     pub fn world_gen(&self) -> crate::save::WorldGen {
         crate::save::WorldGen {
             flat: self.flat,
+            // Set where the world is made: placing it fetches data (earthgen::Place::settle).
+            earth: None,
             structures: self.structures,
             bonus_chest: self.bonus_chest(),
         }
@@ -101,7 +107,14 @@ impl WorldOptions {
             }
             23 => self.difficulty = (self.difficulty + 1) % DIFFICULTIES.len(),
             24 => self.commands = Some(!self.commands(*creative)),
-            25 => self.flat = !self.flat,
+            // Default, Superflat, Earth.
+            25 => {
+                (self.flat, self.earth) = match (self.flat, self.earth) {
+                    (false, false) => (true, false),
+                    (true, _) => (false, true),
+                    _ => (false, false),
+                }
+            }
             27 => self.structures = !self.structures,
             28 => self.bonus_chest = !self.bonus_chest,
             _ => {}
@@ -234,11 +247,15 @@ pub(super) fn buttons(w: f32, h: f32, creative: bool, o: &WorldOptions) -> Vec<B
                 150.0,
                 labelled(
                     "selectWorld.mapType",
-                    tr(if o.flat {
-                        "generator.minecraft.flat"
+                    if o.earth {
+                        "Earth".into()
                     } else {
-                        "generator.minecraft.normal"
-                    }),
+                        tr(if o.flat {
+                            "generator.minecraft.flat"
+                        } else {
+                            "generator.minecraft.normal"
+                        })
+                    },
                 ),
                 true,
                 25,

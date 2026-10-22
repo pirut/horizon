@@ -766,6 +766,7 @@ fn create_world_tabs_follow_vanilla_and_their_choices_reach_the_action() {
         options.world_gen(),
         crate::save::WorldGen {
             flat: true,
+            earth: None,
             structures: true,
             bonus_chest: true
         }
@@ -781,6 +782,7 @@ fn new_world_generation_settings_round_trip() {
     let dir = f.root.join("flat");
     let options = crate::save::WorldGen {
         flat: true,
+        earth: None,
         structures: false,
         bonus_chest: true,
     };
@@ -798,6 +800,18 @@ fn new_world_generation_settings_round_trip() {
         .as_deref(),
         Some("minecraft:flat")
     );
+    let earth = crate::save::WorldGen {
+        flat: false,
+        earth: Some(crate::earthgen::Place {
+            latitude: 35.36,
+            longitude: 138.73,
+            shift: 3712,
+        }),
+        ..options
+    };
+    let dir = f.root.join("earth");
+    crate::save::write_world_gen_settings(&dir, 42, earth).unwrap();
+    assert_eq!(crate::save::WorldGen::read(&dir), Some(earth));
 }
 
 #[test]
