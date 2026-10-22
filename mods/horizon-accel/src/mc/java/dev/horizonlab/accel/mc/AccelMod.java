@@ -38,10 +38,20 @@ import org.slf4j.Logger;
  */
 public final class AccelMod implements ModInitializer {
     static final Logger LOG = LogUtils.getLogger();
+    /** buildTerrain, and every method its work runs through. */
     static final Swaps.Swap TERRAIN = new Swaps.Swap("terrain",
-            "net/minecraft/world/level/levelgen/NoiseBasedChunkGenerator");
+            "net/minecraft/world/level/levelgen/NoiseBasedChunkGenerator", Set.of("buildTerrain",
+                    "lambda$buildTerrain$0", "createNoiseChunk", "doFill", "buildSurface", "generateCarvers",
+                    "applyCarvingMask", "getBiomeGenerationSettingsForCarver"));
+    /**
+     * Mixins on those methods that change how the work runs but never its result: C2ME pools the surface rule's
+     * buffers and picks the executor terrain runs on.
+     */
+    static final Set<String> SAME_RESULTS = Set.of(
+            "com.ishland.c2me.opts.allocs.mixin.object_pooling_caching.MixinNoiseChunkGenerator",
+            "com.ishland.c2me.rewrites.chunksystem.mixin.MixinNoiseChunkGenerator");
     /** vanilla 26.3's world-generation data ({@link WorldgenFingerprint}), with nothing else loaded. */
-    static final String VANILLA_WORLDGEN = "0b6992439d385021a1f7d73ba6bc35c460a4f2d5168cd5cafb9d5d3175216f2f";
+    static final String VANILLA_WORLDGEN = "990509e188c0984b9eabf7ffe84712796fb8388ee12f242fc371b5f57fc9fc8c";
 
     private static volatile HorizonAccel library;
     private static Path resources;
@@ -91,7 +101,8 @@ public final class AccelMod implements ModInitializer {
             WorldGenRegion region, ResourceKey<Level> dimension, boolean structures) {
         List<String> problems = new ArrayList<>();
         if (terrain == null) {
-            terrain = Swaps.decide(TERRAIN, appliedMixins(TERRAIN.targetClass()), "dev.horizonlab.accel.", Map.of());
+            terrain = Swaps.decide(TERRAIN, MixinTargets.of(TERRAIN.targetClass()), "dev.horizonlab.accel.",
+                    SAME_RESULTS, Map.of());
         }
         problems.addAll(terrain.reasons());
         String name = horizonDimension(generator, settings, dimension);
@@ -137,17 +148,5 @@ public final class AccelMod implements ModInitializer {
             return "minecraft:the_end";
         }
         return null;
-    }
-
-    /** The mixins applied to {@code target} (internal name), from Mixin's own class metadata. */
-    static Map<String, Set<String>> appliedMixins(String target) {
-        Set<String> names = new HashSet<>();
-        var info = org.spongepowered.asm.mixin.transformer.ClassInfo.fromCache(target);
-        if (info != null) {
-            for (var mixin : info.getAppliedMixins()) {
-                names.add(mixin.getClassName());
-            }
-        }
-        return Map.of(target, names);
     }
 }

@@ -40,6 +40,17 @@ public final class WorldgenFingerprint {
                 add(entries, access, data, ops);
             }
         }
+        String dump = System.getProperty("horizon.accel.fingerprintDump");
+        if (dump != null) {
+            // Diagnostics: every entry hashed, one per line, to find what a mod or data pack changed.
+            try (var out = java.nio.file.Files.newBufferedWriter(java.nio.file.Path.of(dump))) {
+                for (var entry : entries.entrySet()) {
+                    out.write(entry.getKey() + "\t" + entry.getValue() + "\n");
+                }
+            } catch (java.io.IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        }
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             entries.forEach((key, value) -> {
@@ -60,7 +71,26 @@ public final class WorldgenFingerprint {
         Codec<T> codec = data.elementCodec();
         for (var entry : registry.entrySet()) {
             String key = data.key().identifier() + "/" + entry.getKey().identifier();
-            entries.put(key, codec.encodeStart(ops, entry.getValue()).mapOrElse(Object::toString, e -> "error " + e.message()));
+            entries.put(key, codec.encodeStart(ops, entry.getValue()).mapOrElse(json -> canonical(json).toString(),
+                    e -> "error " + e.message()));
         }
+    }
+
+    /**
+     * Objects with their keys sorted: a codec writes a map in the map's own order, and mods swap vanilla's maps for
+     * faster ones (Lithium's spawn lists), which reorders the JSON without changing a value.
+     */
+    static com.google.gson.JsonElement canonical(com.google.gson.JsonElement json) {
+        if (json.isJsonObject()) {
+            var sorted = new com.google.gson.JsonObject();
+            new TreeMap<>(json.getAsJsonObject().asMap()).forEach((key, value) -> sorted.add(key, canonical(value)));
+            return sorted;
+        }
+        if (json.isJsonArray()) {
+            var array = new com.google.gson.JsonArray();
+            json.getAsJsonArray().forEach(value -> array.add(canonical(value)));
+            return array;
+        }
+        return json;
     }
 }

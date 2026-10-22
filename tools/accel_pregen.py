@@ -68,6 +68,7 @@ def run(config, options):
     (world / "server.properties").write_text(
         f"online-mode=false\nlevel-seed={options.seed}\nview-distance=2\nsimulation-distance=2\n"
         "spawn-protection=0\nsync-chunk-writes=false\n")
+    flags += options.java_arg
     if options.jfr:
         flags.append("-XX:StartFlightRecording=filename=profile.jfr,settings=profile")
     command = ["java", f"-Xms{options.heap}", f"-Xmx{options.heap}", "--enable-native-access=ALL-UNNAMED", *flags,
@@ -134,6 +135,7 @@ def main():
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--heap", default="6G")
     parser.add_argument("--json", type=Path)
+    parser.add_argument("--java-arg", action="append", default=[], help="an extra JVM argument for every server")
     parser.add_argument("--jfr", action="store_true", help="record each run with Java Flight Recorder (profile.jfr)")
     options = parser.parse_args()
     results = []

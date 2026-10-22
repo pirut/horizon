@@ -26,8 +26,9 @@ ROOT = lab.ROOT
 SOURCE = ROOT / "mods/horizon-accel/src"
 BUILD = lab.LOCAL / "accel-build"
 MAVEN = "https://maven.fabricmc.net/"
-# Compile-time only: the Fabric Loader and Mixin a 26.3 Fabric install runs.
-COMPILE = ["net.fabricmc:fabric-loader:0.20.1", "net.fabricmc:sponge-mixin:0.17.5+mixin.0.8.7"]
+# Compile-time only: the Fabric Loader, Mixin and ASM a 26.3 Fabric install runs.
+COMPILE = ["net.fabricmc:fabric-loader:0.20.1", "net.fabricmc:sponge-mixin:0.17.5+mixin.0.8.7",
+           "org.ow2.asm:asm:9.10.1"]
 
 
 def maven(coordinate):

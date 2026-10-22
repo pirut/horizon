@@ -24,23 +24,27 @@ import sys
 from pathlib import Path
 
 try:
-    from . import lab, test_rust_parity as base
+    from . import build_accel_mod, lab, test_rust_parity as base
 except ImportError:
+    import build_accel_mod
     import lab
     import test_rust_parity as base
 
-BENCH = lab.ROOT / "mods/horizon-accel/src/bench/java/dev/horizonlab/accel/bench/VanillaTerrainBench.java"
+SOURCE = lab.ROOT / "mods/horizon-accel/src"
 MEDIAN = re.compile(r"median (.*) ms/chunk")
 
 
 def java_side():
     lock, jars, libraries = base.verify_artifacts()
     classpath = os.pathsep.join(map(str, [jars["server"], *libraries]))
+    compile_only = os.pathsep.join(map(str, map(build_accel_mod.maven, build_accel_mod.COMPILE)))
     classes = lab.LOCAL / "accel-bench/classes"
     classes.mkdir(parents=True, exist_ok=True)
+    # The bench links the mod's own classes (the swap, for HORIZON_ACCEL_MODE) but needs no Fabric to run.
+    sources = sorted(str(p) for d in ("main", "mc", "bench") for p in (SOURCE / d).rglob("*.java"))
     subprocess.run(["javac", "--release", str(lock["minecraft"]["java_major"]), "-proc:none", "-nowarn",
-                    "-cp", classpath, "-d", str(classes), str(BENCH)], check=True)
-    return ["java", "-Xmx8G", "-cp", str(classes) + os.pathsep + classpath,
+                    "-cp", classpath + os.pathsep + compile_only, "-d", str(classes), *sources], check=True)
+    return ["java", "-Xmx8G", "--enable-native-access=ALL-UNNAMED", "-cp", str(classes) + os.pathsep + classpath,
             "dev.horizonlab.accel.bench.VanillaTerrainBench"]
 
 
