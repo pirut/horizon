@@ -68,6 +68,8 @@ def run(config, options):
     (world / "server.properties").write_text(
         f"online-mode=false\nlevel-seed={options.seed}\nview-distance=2\nsimulation-distance=2\n"
         "spawn-protection=0\nsync-chunk-writes=false\n")
+    if options.jfr:
+        flags.append("-XX:StartFlightRecording=filename=profile.jfr,settings=profile")
     command = ["java", f"-Xms{options.heap}", f"-Xmx{options.heap}", "--enable-native-access=ALL-UNNAMED", *flags,
                "-jar", "fabric-server.jar", "nogui"]
     env = {k: v for k, v in os.environ.items() if k != "JAVA_TOOL_OPTIONS"}
@@ -132,6 +134,7 @@ def main():
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--heap", default="6G")
     parser.add_argument("--json", type=Path)
+    parser.add_argument("--jfr", action="store_true", help="record each run with Java Flight Recorder (profile.jfr)")
     options = parser.parse_args()
     results = []
     for _ in range(options.repeat):

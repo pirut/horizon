@@ -86,7 +86,9 @@ public final class TerrainSwap {
 
     /** Fills {@code chunk} as vanilla's {@code buildTerrain} would, and returns it. */
     public ChunkAccess fill(ChunkAccess chunk) {
+        long start = System.nanoTime();
         HorizonAccel.Chunk generated = generator.generate(chunk.getPos().x(), chunk.getPos().z());
+        long generatedAt = System.nanoTime();
         LevelChunkSection[] sections = chunk.getSections();
         int offset = (generated.minY() - chunk.getMinY()) >> 4;
         for (int s = 0; s < generated.sections().length; s++) {
@@ -109,6 +111,33 @@ public final class TerrainSwap {
             }
         }
         Heightmap.primeHeightmaps(chunk, WORLDGEN_HEIGHTMAPS);
+        stats.add(generatedAt - start, System.nanoTime() - generatedAt);
         return chunk;
+    }
+
+    /** Time spent per chunk, in Rust and in writing its result into the chunk, logged every 4096 chunks. */
+    private final Stats stats = new Stats();
+
+    private static String ms(double nanos, double n) {
+        return String.format("%.2f", nanos / 1e6 / n);
+    }
+
+    private final class Stats {
+        private final java.util.concurrent.atomic.AtomicLong chunks = new java.util.concurrent.atomic.AtomicLong();
+        private final java.util.concurrent.atomic.LongAdder rust = new java.util.concurrent.atomic.LongAdder();
+        private final java.util.concurrent.atomic.LongAdder write = new java.util.concurrent.atomic.LongAdder();
+
+        void add(long rustNanos, long writeNanos) {
+            rust.add(rustNanos);
+            write.add(writeNanos);
+            long n = chunks.incrementAndGet();
+            if (n % 4096 == 0) {
+                long[] stages = generator.stageNanos();
+                double c = Math.max(1, stages[0]);
+                AccelMod.LOG.info("horizon-accel: {} chunks of terrain, {} ms each in Rust (biomes {}, noise {}, surface {}, "
+                        + "structures {}, carvers {}), {} ms writing them", n, ms(rust.sum(), n), ms(stages[1], c),
+                        ms(stages[2], c), ms(stages[3], c), ms(stages[4], c), ms(stages[5], c), ms(write.sum(), n));
+            }
+        }
     }
 }
