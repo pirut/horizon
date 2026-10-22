@@ -10,7 +10,14 @@ use crate::{
     registry::{BlockRegistry, BlockStateId},
 };
 use horizon_core::geometry::{Aabb, Axis, Direction, Vec3, VoxelShape};
-use std::{collections::HashMap, io, sync::Arc};
+use std::{
+    collections::HashMap,
+    io,
+    sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+    },
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct ShulkerCollisionState {
@@ -79,6 +86,9 @@ pub struct BlockCollisionRegistry<'r> {
     dynamic: HashMap<BlockStateId, DynamicSupport>,
     contextual: HashMap<BlockStateId, ContextualRule>,
     scan_flags: Vec<u8>,
+    /// Per state with a cached shape, the faces its collision shape fully covers (bit per [`Direction`]), once
+    /// worked out; bit 7 marks it worked out.
+    full_faces: Vec<AtomicU8>,
 }
 enum ContextualRule {
     Scaffolding(ScaffoldingCollision),
@@ -122,12 +132,36 @@ impl<'r> BlockCollisionRegistry<'r> {
                 }
             }
         }
+        let full_faces = (0..scan_flags.len()).map(|_| AtomicU8::new(0)).collect();
         Ok(Self {
             cached,
             dynamic,
             contextual,
             scan_flags,
+            full_faces,
         })
+    }
+    /// Whether the state's cached collision shape fully covers `face`, as
+    /// [`SupportType::Full`](crate::block_support::SupportType::Full) supports
+    /// it; None for a state without a cached shape. Worked out once per state:
+    /// vines and lichen ask it of every neighbour they consider.
+    pub fn cached_face_full(&self, state: BlockStateId, face: Direction) -> Option<bool> {
+        let slot = self.full_faces.get(state.0 as usize)?;
+        let mut faces = slot.load(Ordering::Relaxed);
+        if faces & 0x80 == 0 {
+            let shape = self.cached.cached_shape(state).ok()??;
+            faces = 0x80;
+            for direction in Direction::ALL {
+                if crate::block_support::SupportType::Full
+                    .is_supporting(shape, direction)
+                    .ok()?
+                {
+                    faces |= 1 << direction as u8;
+                }
+            }
+            slot.store(faces, Ordering::Relaxed);
+        }
+        Some(faces & (1 << face as u8) != 0)
     }
     pub fn registry(&self) -> &'r BlockRegistry {
         self.cached.registry()

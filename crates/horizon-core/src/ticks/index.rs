@@ -12,11 +12,13 @@ fn mix(key: i64) -> usize {
     value ^= value >> 32;
     (value ^ (value >> 16)) as usize
 }
+/// Empty until the first entry: most tick lists never get one (each
+/// decoration shape update makes a scratch level with two).
 impl Default for DeadlineIndex {
     fn default() -> Self {
         Self {
-            keys: vec![0; 33],
-            values: vec![0; 33],
+            keys: Vec::new(),
+            values: Vec::new(),
             zero: false,
             size: 0,
         }
@@ -38,6 +40,10 @@ impl DeadlineIndex {
         slot
     }
     pub(super) fn put(&mut self, key: i64, value: i64) {
+        if self.keys.is_empty() {
+            self.keys = vec![0; 33];
+            self.values = vec![0; 33];
+        }
         let slot = self.find(key);
         let exists = if key == 0 {
             self.zero
@@ -101,6 +107,9 @@ impl DeadlineIndex {
         }
     }
     pub(super) fn remove(&mut self, key: i64) {
+        if self.keys.is_empty() {
+            return;
+        }
         let slot = self.find(key);
         if key == 0 {
             if !self.zero {
@@ -121,6 +130,9 @@ impl DeadlineIndex {
     /// Visit in vanilla iterator order. The callback updates the deadline and
     /// returns true to remove the entry. Regular iterator removal does not shrink.
     pub(super) fn visit(&mut self, mut action: impl FnMut(i64, &mut i64) -> bool) {
+        if self.keys.is_empty() {
+            return;
+        }
         let mut remaining = self.size;
         let mut position = self.capacity() as isize;
         let mut wrapped = Vec::new();
