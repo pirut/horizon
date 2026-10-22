@@ -93,6 +93,49 @@ public final class VanillaTerrainBench {
         public net.minecraft.server.MinecraftServer getServer() {
             return server;
         }
+        // Scheduled ticks read the game time; generation starts at 0.
+        static final net.minecraft.world.level.storage.LevelData DATA = new net.minecraft.world.level.storage.LevelData() {
+            public RespawnData getRespawnData() { return null; }
+            public long getGameTime() { return 0; }
+            public boolean isHardcore() { return false; }
+            public net.minecraft.world.Difficulty getDifficulty() { return net.minecraft.world.Difficulty.NORMAL; }
+            public boolean isDifficultyLocked() { return false; }
+        };
+        @Override
+        public net.minecraft.world.level.storage.LevelData getLevelData() {
+            return DATA;
+        }
+        static final java.util.concurrent.atomic.AtomicInteger IDS = new java.util.concurrent.atomic.AtomicInteger();
+        @Override
+        public long getOverworldClockTime() {
+            return 0;
+        }
+        @Override
+        public long getDefaultClockTime() {
+            return 0;
+        }
+        // Lighting runs after FEATURES, so every light read during it is 0.
+        static final net.minecraft.world.level.lighting.LevelLightEngine LIGHT = new net.minecraft.world.level.lighting.LevelLightEngine(
+                new net.minecraft.world.level.chunk.LightChunkGetter() {
+                    public net.minecraft.world.level.chunk.LightChunk getChunkForLighting(int x, int z) { return null; }
+                    public net.minecraft.world.level.BlockGetter getLevel() { return null; }
+                }, false, false);
+        @Override
+        public net.minecraft.world.level.lighting.LevelLightEngine getLightEngine() {
+            return LIGHT;
+        }
+        // The server queues POI updates for its main thread; nothing reads them here.
+        @Override
+        public void updatePOIOnBlockStateChange(net.minecraft.core.BlockPos pos, net.minecraft.world.level.block.state.BlockState oldState, net.minecraft.world.level.block.state.BlockState newState) {
+        }
+        @Override
+        public float getMoonBrightness(net.minecraft.core.BlockPos pos) {
+            return 1.0f;
+        }
+        @Override
+        public int getNextEntityId() {
+            return IDS.incrementAndGet();
+        }
         @Override
         public long getSeed() {
             return seed;
@@ -321,6 +364,7 @@ public final class VanillaTerrainBench {
         // HORIZON_ACCEL_LIB and HORIZON_ACCEL_RESOURCES: also open horizon-accel's terrain swap. HORIZON_ACCEL_MODE
         // "swap" times it in place of vanilla's TERRAIN status; "parity" compares it with vanilla's chunks.
         String mode = System.getenv().getOrDefault("HORIZON_ACCEL_MODE", "swap");
+        boolean features = System.getenv("HORIZON_BENCH_FEATURES") != null;
         TerrainSwap opened = null;
         if (System.getenv("HORIZON_ACCEL_LIB") != null) {
             long start = System.nanoTime();
@@ -341,25 +385,27 @@ public final class VanillaTerrainBench {
             chunks.clear();
             // A fresh square each round, far from the last, so nothing is reused.
             int x0 = round * (size + 32), z0 = 0, x1 = x0 + size - 1, z1 = size - 1;
-            long starts = timed(pool, threads, x0 - 8, z0 - 8, x1 + 8, z1 + 8, (x, z) -> {
+            int m = features ? 1 : 0;
+            long starts = timed(pool, threads, x0 - 8 - m, z0 - 8 - m, x1 + 8 + m, z1 + 8 + m, (x, z) -> {
                 var chunk = chunkAt.apply(x, z);
                 generator.createStructures(access, state, BenchLevel.structures, chunk, templates, levelKey);
                 chunk.setPersistedStatus(ChunkStatus.STRUCTURE_STARTS);
             });
-            long references = timed(pool, threads, x0, z0, x1, z1, (x, z) -> {
+            // HORIZON_BENCH_FEATURES: also decorate the square, so terrain and everything before it run one chunk further out.
+            long references = timed(pool, threads, x0 - m, z0 - m, x1 + m, z1 + m, (x, z) -> {
                 var chunk = chunkAt.apply(x, z);
                 var region = regionFor.apply(ChunkStatus.STRUCTURE_REFERENCES, chunk);
                 generator.createReferences(region, BenchLevel.structures.forWorldGenRegion(region), chunk);
                 chunk.setPersistedStatus(ChunkStatus.STRUCTURE_REFERENCES);
             });
             // TERRAIN reads its neighbours' biomes, so biomes run one chunk further out.
-            long biomes = timed(pool, threads, x0 - 1, z0 - 1, x1 + 1, z1 + 1, (x, z) -> {
+            long biomes = timed(pool, threads, x0 - 1 - m, z0 - 1 - m, x1 + 1 + m, z1 + 1 + m, (x, z) -> {
                 var chunk = chunkAt.apply(x, z);
                 var region = regionFor.apply(ChunkStatus.BIOMES, chunk);
                 generator.createBiomes(randomState, Blender.empty(), BenchLevel.structures.forWorldGenRegion(region), chunk).join();
                 chunk.setPersistedStatus(ChunkStatus.BIOMES);
             });
-            long terrain = timed(pool, threads, x0, z0, x1, z1, (x, z) -> {
+            long terrain = timed(pool, threads, x0 - m, z0 - m, x1 + m, z1 + m, (x, z) -> {
                 var chunk = chunkAt.apply(x, z);
                 if (swap != null && mode.equals("swap")) {
                     swap.fill(chunk);
@@ -375,15 +421,30 @@ public final class VanillaTerrainBench {
             if (swap != null && mode.equals("parity")) {
                 parity(swap, chunks, x0, z0, x1, z1, height, factory);
             }
+            // One thread in row order, as decoration order changes what neighbours see.
+            long decorate = 0;
+            if (features) {
+                long start = System.nanoTime();
+                for (int z = z0; z <= z1; z++) {
+                    for (int x = x0; x <= x1; x++) {
+                        var chunk = chunkAt.apply(x, z);
+                        var region = regionFor.apply(ChunkStatus.FEATURES, chunk);
+                        generator.applyBiomeDecoration(region, chunk, BenchLevel.structures.forWorldGenRegion(region));
+                        chunk.setPersistedStatus(ChunkStatus.FEATURES);
+                    }
+                }
+                decorate = System.nanoTime() - start;
+            }
             // Each status over the chunks it ran on: in a running server every chunk passes each status once.
-            double n = size * size, ns = (size + 16) * (size + 16), nb = (size + 2) * (size + 2);
-            double[] r = {starts / 1e6 / ns, references / 1e6 / n, biomes / 1e6 / nb, terrain / 1e6 / n, 0};
-            r[4] = r[0] + r[1] + r[2] + r[3];
-            System.out.printf("%s %d: starts %.3f refs %.3f biomes %.3f terrain %.3f total %.3f ms/chunk%n",
-                    round < warmup ? "warmup" : "round", round, r[0], r[1], r[2], r[3], r[4]);
+            double n = size * size, ns = (size + 16 + 2 * m) * (size + 16 + 2 * m), nb = (size + 2 + 2 * m) * (size + 2 + 2 * m);
+            double nt = (size + 2 * m) * (size + 2 * m);
+            double[] r = {starts / 1e6 / ns, references / 1e6 / nt, biomes / 1e6 / nb, terrain / 1e6 / nt, decorate / 1e6 / n, 0};
+            r[5] = r[0] + r[1] + r[2] + r[3] + r[4];
+            System.out.printf("%s %d: starts %.3f refs %.3f biomes %.3f terrain %.3f features %.3f total %.3f ms/chunk%n",
+                    round < warmup ? "warmup" : "round", round, r[0], r[1], r[2], r[3], r[4], r[5]);
             if (round >= warmup) results[round - warmup] = r;
         }
-        String[] names = {"starts", "refs", "biomes", "terrain", "total"};
+        String[] names = {"starts", "refs", "biomes", "terrain", "features", "total"};
         StringBuilder line = new StringBuilder("median");
         for (int i = 0; i < names.length; i++) {
             final int k = i;
