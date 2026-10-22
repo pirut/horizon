@@ -12,6 +12,8 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 horizon-core = { path = "../horizon-core" }
 horizon-world = { path = "../horizon-world" }
+# zlib streams for chunk saves, loads and packets (src/zlib.rs), the same zlib-rs build as horizon-world.
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 
 [lints]
 workspace = true
