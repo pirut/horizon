@@ -427,6 +427,77 @@ impl<'r> BlockSection<'r> {
         section.extra = container.extra;
         Ok(section)
     }
+    /// A section from a vanilla `PalettedContainer`: its palette and its
+    /// packed indices in `SimpleBitStorage` layout, `bits` per index (0 for a
+    /// single-state palette, whose words are empty). Palette slots no index
+    /// uses become free slots; indices outside the palette are rejected.
+    pub fn from_packed(
+        palette: &[BlockStateId],
+        bits: u8,
+        words: &[u64],
+        registry: &'r BlockRegistry,
+    ) -> io::Result<Self> {
+        let first = *palette.first().ok_or_else(|| invalid("empty palette"))?;
+        if palette.iter().any(|s| s.0 as usize >= registry.len()) {
+            return Err(invalid("state ID outside registry"));
+        }
+        if bits == 0 {
+            return Self::uniform(first, registry);
+        }
+        let storage = PackedStorage::from_words(bits, 4096, words.to_vec())
+            .map_err(|e| invalid(e.to_string()))?;
+        // Word by word: this runs for every section Java hands over.
+        let mut counts = vec![0u16; palette.len()];
+        let (bits, per_word) = (u32::from(bits), 64 / usize::from(bits));
+        let mask = (1u64 << bits) - 1;
+        for (w, &word) in words.iter().enumerate() {
+            let mut word = word;
+            for _ in 0..per_word.min(4096 - w * per_word) {
+                *counts
+                    .get_mut((word & mask) as usize)
+                    .ok_or_else(|| invalid("palette index outside palette"))? += 1;
+                word >>= bits;
+            }
+        }
+        if let Some(only) = counts.iter().position(|&c| c == 4096) {
+            return Self::uniform(palette[only], registry);
+        }
+        let mut local_ids = LocalIds::default();
+        let mut unique = true;
+        for (id, (&state, &count)) in palette.iter().zip(&counts).enumerate() {
+            if count != 0 && local_ids.insert(state, id as u32).is_some() {
+                unique = false;
+            }
+        }
+        if unique && bits == u32::from(bits_for_palette(palette.len(), 4)) {
+            let free = (0..palette.len() as u32)
+                .filter(|&id| counts[id as usize] == 0)
+                .collect();
+            return Ok(Self {
+                palette: palette.to_vec(),
+                local_ids,
+                counts,
+                free,
+                storage: Some(storage),
+                registry,
+                extra: Compound::new(),
+            });
+        }
+        // Another width (or a palette listing a state twice): rebuild it.
+        let mut section = Self::uniform(palette[storage.read(0) as usize], registry)?;
+        for i in 1..4096 {
+            section.set(i, palette[storage.read(i) as usize])?;
+        }
+        Ok(section)
+    }
+    /// Each distinct state with the number of cells holding it.
+    pub fn state_counts(&self) -> impl Iterator<Item = (BlockStateId, u16)> + '_ {
+        self.palette
+            .iter()
+            .zip(&self.counts)
+            .filter(|(_, count)| **count != 0)
+            .map(|(&state, &count)| (state, count))
+    }
     /// Test current distinct states without unpacking all 4,096 cells. The
     /// predicate should be pure; unused palette slots are intentionally skipped.
     pub fn any_state(&self, mut predicate: impl FnMut(BlockStateId) -> bool) -> bool {
@@ -714,6 +785,40 @@ mod tests {
             let local = (words[i / per_word] >> (i % per_word * bits)) & ((1 << bits) - 1);
             assert_eq!(palette[local as usize], section.get(i).unwrap());
         }
+    }
+
+    /// `from_packed` reads back what `packed` wrote, adopting the storage or
+    /// rebuilding it at another width, and collapses a one-state section.
+    #[test]
+    fn from_packed_round_trips() {
+        let registry = benchmark_registry(40);
+        let mut section = BlockSection::uniform(BlockStateId(3), &registry).unwrap();
+        for i in 0..4096 {
+            section.set(i, BlockStateId((i * 7 % 40) as u32)).unwrap();
+        }
+        let (palette, words) = section.packed();
+        let loaded = BlockSection::from_packed(palette, section.bits(), words, &registry).unwrap();
+        // A wider width than the palette needs, as a vanilla palette may have.
+        let wide = BlockSection::from_packed(palette, 8, &widen(words, section.bits(), 8), &registry).unwrap();
+        for i in 0..4096 {
+            assert_eq!(loaded.get(i).unwrap(), section.get(i).unwrap());
+            assert_eq!(wide.get(i).unwrap(), section.get(i).unwrap());
+        }
+        let one = BlockSection::from_packed(&[BlockStateId(5), BlockStateId(9)], 4, &[0x1111_1111_1111_1111; 256], &registry)
+            .unwrap();
+        assert_eq!(one.bits(), 0);
+        assert_eq!(one.get(17).unwrap(), BlockStateId(9));
+        assert!(BlockSection::from_packed(&[BlockStateId(5)], 4, &[0x2222_2222_2222_2222; 256], &registry).is_err());
+    }
+
+    fn widen(words: &[u64], from: u8, to: u8) -> Vec<u64> {
+        let (from, to) = (from as usize, to as usize);
+        let mut out = vec![0u64; 4096_usize.div_ceil(64 / to)];
+        for i in 0..4096 {
+            let v = (words[i / (64 / from)] >> (i % (64 / from) * from)) & ((1 << from) - 1);
+            out[i / (64 / to)] |= v << (i % (64 / to) * to);
+        }
+        out
     }
 
     /// The optimized `set`/`get` must agree with the pre-optimization ones on

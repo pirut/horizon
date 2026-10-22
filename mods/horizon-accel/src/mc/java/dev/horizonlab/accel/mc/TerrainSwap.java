@@ -78,6 +78,20 @@ public final class TerrainSwap {
         }
     }
 
+    private volatile FeatureSwap features;
+
+    /** The FEATURES status over the same generator. */
+    public FeatureSwap features() {
+        if (features == null) {
+            synchronized (this) {
+                if (features == null) {
+                    features = new FeatureSwap(generator);
+                }
+            }
+        }
+        return features;
+    }
+
     /** Why the swap can't run, if it can't: the block states Horizon makes that this game doesn't have. */
     public List<String> problems() {
         return unmapped.isEmpty() ? List.of() : List.of(unmapped.size() + " block states unmapped, first "
@@ -87,8 +101,28 @@ public final class TerrainSwap {
     /** Fills {@code chunk} as vanilla's {@code buildTerrain} would, and returns it. */
     public ChunkAccess fill(ChunkAccess chunk) {
         long start = System.nanoTime();
-        HorizonAccel.Chunk generated = generator.generate(chunk.getPos().x(), chunk.getPos().z());
+        HorizonAccel.Generator.Generated kept = generator.generateKeepable(chunk.getPos().x(), chunk.getPos().z());
         long generatedAt = System.nanoTime();
+        try {
+            write(kept.chunk(), chunk);
+        } catch (RuntimeException | Error e) {
+            kept.free();
+            throw e;
+        }
+        // Horizon keeps its copy for decorating the chunk, unless nothing will decorate it there.
+        FeatureSwap decorating = features;
+        if (decorating != null) {
+            int[] mask = new int[1];
+            long[] words = FeatureSwap.heightmaps(chunk, mask);
+            kept.keep(decorating.track(chunk), mask[0], words);
+        } else {
+            kept.free();
+        }
+        stats.add(generatedAt - start, System.nanoTime() - generatedAt);
+        return chunk;
+    }
+
+    private static void write(HorizonAccel.Chunk generated, ChunkAccess chunk) {
         LevelChunkSection[] sections = chunk.getSections();
         int offset = (generated.minY() - chunk.getMinY()) >> 4;
         for (int s = 0; s < generated.sections().length; s++) {
@@ -111,8 +145,6 @@ public final class TerrainSwap {
             }
         }
         Heightmap.primeHeightmaps(chunk, WORLDGEN_HEIGHTMAPS);
-        stats.add(generatedAt - start, System.nanoTime() - generatedAt);
-        return chunk;
     }
 
     /** Time spent per chunk, in Rust and in writing its result into the chunk, logged every 4096 chunks. */

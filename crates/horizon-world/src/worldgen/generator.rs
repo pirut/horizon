@@ -528,6 +528,8 @@ impl GeneratorData {
     }
 }
 
+pub use super::generator_decoration::DecorationOp;
+
 /// A generated chunk with its quart biomes. Blocks and heightmaps live in
 /// `terrain`; after `generate_proto` it is at the TERRAIN status with the
 /// WORLD_SURFACE(_WG), OCEAN_FLOOR(_WG) and MOTION_BLOCKING(_NO_LEAVES)
@@ -593,6 +595,10 @@ impl ProtoChunk {
     }
     pub fn is_decorated(&self) -> bool {
         self.decorated
+    }
+    /// How many structure starts reference this chunk.
+    pub fn structure_start_count(&self) -> usize {
+        self.structure_starts.len()
     }
     /// Also restores a saved proto chunk that was decorated before it was saved.
     pub fn set_decorated(&mut self) {
@@ -1502,6 +1508,8 @@ pub(super) struct WorkerState {
     heights: HashMap<(i32, i32, u8), i32>,
     /// Decorate with structure pieces only (for structure parity checks).
     pub(super) structures_only: bool,
+    /// When set, decoration records each world write here, in order.
+    pub(super) decoration_log: Option<Vec<super::generator_decoration::DecorationOp>>,
 }
 
 trait SeededPipeline: Send + Sync {
@@ -1515,8 +1523,17 @@ trait SeededPipeline: Send + Sync {
         worker: &mut WorkerState,
         region: &mut [ProtoChunk; 9],
     ) -> Result<DecorateStats, GeneratorError>;
+    fn proto_from_sections(
+        &self,
+        worker: &mut WorkerState,
+        pos: ChunkPos,
+        sections: Vec<crate::chunk::BlockSection<'static>>,
+        heightmaps: &[(HeightmapType, &[u64])],
+        references: bool,
+    ) -> Result<ProtoChunk, GeneratorError>;
     fn data(&self) -> &Arc<GeneratorData>;
     fn sea_level(&self) -> i32;
+    fn level_range(&self) -> (i32, i32);
     fn surface_sample(
         &self,
         worker: &mut WorkerState,
@@ -1572,6 +1589,56 @@ where
     ) -> Result<ProtoChunk, GeneratorError> {
         Pipeline::generate(self, worker, pos)
     }
+    fn proto_from_sections(
+        &self,
+        worker: &mut WorkerState,
+        pos: ChunkPos,
+        sections: Vec<crate::chunk::BlockSection<'static>>,
+        heightmaps: &[(HeightmapType, &[u64])],
+        references: bool,
+    ) -> Result<ProtoChunk, GeneratorError> {
+        let data = &self.data;
+        let biomes = (*self.biome_chunk(worker, pos)?).clone();
+        let mut chunk = TerrainChunk::new(
+            pos,
+            self.settings.level_min_y,
+            self.settings.level_height,
+            data.registry,
+            data.states.clone(),
+        )
+        .map_err(stage("noise"))?;
+        for (index, section) in sections.into_iter().enumerate() {
+            chunk.set_section(index, section).map_err(stage("copy"))?;
+        }
+        // As the source kept them: maintained heightmaps can differ from ones
+        // primed again, and the missing ones are primed when first read.
+        for (kind, words) in heightmaps {
+            chunk
+                .set_heightmap_raw(*kind, words)
+                .map_err(stage("heightmaps"))?;
+        }
+        chunk.set_generation_stage(PreLightChunkStage::Terrain);
+        let structure_starts = match (&self.structures, references) {
+            (Some(structures), true) => structures.references(
+                &mut StructureQueries {
+                    pipeline: self,
+                    worker,
+                    valid: BTreeSet::new(),
+                },
+                pos,
+            ),
+            _ => Vec::new(),
+        };
+        Ok(ProtoChunk {
+            terrain: chunk,
+            biomes,
+            data: data.clone(),
+            decorated: false,
+            block_entities: Vec::new(),
+            structure_starts,
+            entities: Vec::new(),
+        })
+    }
     fn decorate(
         &self,
         worker: &mut WorkerState,
@@ -1608,6 +1675,9 @@ where
     }
     fn sea_level(&self) -> i32 {
         self.settings.sea_level
+    }
+    fn level_range(&self) -> (i32, i32) {
+        (self.settings.level_min_y, self.settings.level_height)
     }
     fn structure_starts(
         &self,
@@ -2255,6 +2325,10 @@ impl OverworldGenerator {
     pub fn sea_level(&self) -> i32 {
         self.pipeline.sea_level()
     }
+    /// The dimension's build range, `(min_y, height)`: what proto chunks span.
+    pub fn level_range(&self) -> (i32, i32) {
+        self.pipeline.level_range()
+    }
     /// Placed features of this dimension's biomes that decoration skips because
     /// their algorithm or bindings are not implemented, with the decode error.
     pub fn unsupported_features(&self) -> Vec<(String, String)> {
@@ -2293,6 +2367,7 @@ impl OverworldGenerator {
                 timings: StageTimings::default(),
                 structures_only: false,
                 heights: HashMap::new(),
+                decoration_log: None,
             },
         }
     }
@@ -2321,6 +2396,20 @@ impl GeneratorWorker {
         let result = self.pipeline.generate(&mut self.state, pos);
         self.state.timings.chunks += 1;
         result
+    }
+    /// A TERRAIN-status chunk from blocks generated elsewhere (one section per
+    /// 16 blocks of the level's height, from the bottom), with this world's
+    /// biomes, the heightmaps given (raw words) and, when asked, the structure
+    /// starts that reference it: what a decoration region needs.
+    pub fn proto_from_sections(
+        &mut self,
+        pos: ChunkPos,
+        sections: Vec<crate::chunk::BlockSection<'static>>,
+        heightmaps: &[(HeightmapType, &[u64])],
+        references: bool,
+    ) -> Result<ProtoChunk, GeneratorError> {
+        self.pipeline
+            .proto_from_sections(&mut self.state, pos, sections, heightmaps, references)
     }
     /// Noise/aquifer surface and its material rule, without chunks, structures or features.
     pub fn surface_sample(&mut self, x: i32, z: i32) -> Option<SurfaceSample> {
@@ -2396,6 +2485,17 @@ impl GeneratorWorker {
         region: &mut [ProtoChunk; 9],
     ) -> Result<DecorateStats, GeneratorError> {
         self.pipeline.decorate(&mut self.state, region)
+    }
+    /// `decorate`, also returning every world write it made, in order, so
+    /// another representation of the same region can repeat them.
+    pub fn decorate_logged(
+        &mut self,
+        region: &mut [ProtoChunk; 9],
+    ) -> Result<(DecorateStats, Vec<DecorationOp>), GeneratorError> {
+        self.state.decoration_log = Some(Vec::new());
+        let result = self.pipeline.decorate(&mut self.state, region);
+        let log = self.state.decoration_log.take().unwrap_or_default();
+        result.map(|stats| (stats, log))
     }
     /// Skip placed features when decorating and keep structure pieces only
     /// (for structure placement parity checks).

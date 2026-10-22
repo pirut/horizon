@@ -9,6 +9,9 @@
 //!
 //! No panic crosses the boundary: each entry point catches it and reports
 //! it like any other error, through [`horizon_accel_error`].
+mod decorate;
+
+pub use decorate::{Decoration, RECORD};
 use horizon_core::position::ChunkPos;
 use horizon_world::{
     registry::{BlockRegistry, BlockStateId},
@@ -26,7 +29,7 @@ use std::{
 };
 
 /// Bumped whenever a signature or a layout below changes.
-pub const ABI: u32 = 2;
+pub const ABI: u32 = 3;
 
 /// One dimension's generator, shared by every Java worldgen thread.
 pub struct Accel {
@@ -37,6 +40,9 @@ pub struct Accel {
     /// Horizon state id to the caller's id, once mapped.
     state_map: OnceLock<Vec<i32>>,
     biome_map: OnceLock<Vec<i32>>,
+    /// The caller's state id to Horizon's, built on first decoration.
+    inverse_map: OnceLock<Vec<i32>>,
+    cache: Mutex<decorate::ChunkCache>,
 }
 
 pub struct Chunk {
@@ -151,6 +157,8 @@ impl Accel {
             states,
             state_map: OnceLock::new(),
             biome_map: OnceLock::new(),
+            inverse_map: OnceLock::new(),
+            cache: Mutex::default(),
         })
     }
 
@@ -604,6 +612,128 @@ pub unsafe extern "C" fn horizon_accel_chunk_free(chunk: *mut Chunk) {
     if !chunk.is_null() {
         // SAFETY: the caller hands back ownership.
         drop(unsafe { Box::from_raw(chunk) });
+    }
+}
+
+/// Decorates chunk (`cx`, `cz`) (vanilla's FEATURES status) on a copy of its
+/// 3×3 region that Java passes in (layout in [`Decoration`]'s module), and
+/// returns the writes for Java to repeat. Null on error.
+///
+/// # Safety
+/// `accel` must be open, `ints` and `longs` hold their lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn horizon_accel_decorate(
+    accel: *const Accel,
+    cx: i32,
+    cz: i32,
+    ints: *const i32,
+    ints_len: usize,
+    longs: *const i64,
+    longs_len: usize,
+) -> *mut Decoration {
+    guard(std::ptr::null_mut(), || {
+        // SAFETY: the caller passes an open generator and valid buffers.
+        let (accel, ints, longs) = unsafe {
+            (
+                &*accel,
+                std::slice::from_raw_parts(ints, ints_len),
+                std::slice::from_raw_parts(longs, longs_len),
+            )
+        };
+        Ok(Box::into_raw(Box::new(accel.decorate(cx, cz, ints, longs)?)))
+    })
+}
+
+/// Writes `[op ints, string bytes, unsupported, copy ns, decorate ns,
+/// missing]` for a decoration into `out` (6 slots).
+///
+/// # Safety
+/// `decoration` must be live and `out` hold 6 writable `i64`s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn horizon_accel_decoration_sizes(decoration: *const Decoration, out: *mut i64) {
+    // SAFETY: the caller passes a live decoration and a buffer of 6.
+    let (d, out) = unsafe { (&*decoration, std::slice::from_raw_parts_mut(out, 6)) };
+    out.copy_from_slice(&[
+        d.ops.len() as i64,
+        d.strings.len() as i64,
+        d.unsupported as i64,
+        d.copy_nanos as i64,
+        d.decorate_nanos as i64,
+        d.missing as i64,
+    ]);
+}
+
+/// Hands a generated chunk back to keep for decoration, under the caller's
+/// `token`, with the heightmaps the caller's copy has (`mask` and `words` as
+/// in [`horizon_accel_decorate`]'s input). Takes ownership of `chunk` either
+/// way. 0 on success, -1 on error.
+///
+/// # Safety
+/// `accel` must be open, `chunk` come from [`horizon_accel_generate`] and not
+/// be used after, `words` hold `len` longs.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn horizon_accel_chunk_keep(
+    accel: *const Accel,
+    chunk: *mut Chunk,
+    token: u64,
+    mask: i32,
+    words: *const i64,
+    len: usize,
+) -> i32 {
+    // SAFETY: the caller hands over ownership of a live chunk.
+    let chunk = *unsafe { Box::from_raw(chunk) };
+    guard(-1, || {
+        // SAFETY: the caller passes an open generator and a valid buffer.
+        let (accel, words) = unsafe { (&*accel, std::slice::from_raw_parts(words, len)) };
+        accel.keep(chunk, token, mask, words).map(|()| 0)
+    })
+}
+
+/// Forgets kept chunks (the caller decorated their region itself).
+///
+/// # Safety
+/// `accel` must be open and `tokens` hold `len` tokens.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn horizon_accel_forget(accel: *const Accel, tokens: *const u64, len: usize) {
+    // SAFETY: the caller passes an open generator and a valid buffer.
+    let (accel, tokens) = unsafe { (&*accel, std::slice::from_raw_parts(tokens, len)) };
+    let mut cache = accel.cache.lock().unwrap();
+    tokens.iter().for_each(|&t| cache.forget(t));
+}
+
+/// Copies a decoration's records and strings, which must fit the buffers
+/// ([`horizon_accel_decoration_sizes`]). 0 on success, -1 when they don't.
+///
+/// # Safety
+/// `decoration` must be live, `ops` and `strings` hold their caps.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn horizon_accel_decoration_copy(
+    decoration: *const Decoration,
+    ops: *mut i32,
+    ops_cap: usize,
+    strings: *mut u8,
+    strings_cap: usize,
+) -> i32 {
+    // SAFETY: the caller passes a live decoration.
+    let d = unsafe { &*decoration };
+    if d.ops.len() > ops_cap || d.strings.len() > strings_cap {
+        return -1;
+    }
+    // SAFETY: both fit, checked above.
+    unsafe {
+        std::ptr::copy_nonoverlapping(d.ops.as_ptr(), ops, d.ops.len());
+        std::ptr::copy_nonoverlapping(d.strings.as_ptr(), strings, d.strings.len());
+    }
+    0
+}
+
+/// # Safety
+/// `decoration` must come from [`horizon_accel_decorate`] and not be used after.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn horizon_accel_decoration_free(decoration: *mut Decoration) {
+    if !decoration.is_null() {
+        // SAFETY: the caller hands back ownership.
+        drop(unsafe { Box::from_raw(decoration) });
     }
 }
 
