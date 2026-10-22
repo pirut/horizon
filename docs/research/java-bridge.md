@@ -209,6 +209,20 @@ vanilla's, and the bytes match, also for a 3 MB tag that grows the buffer (`HORI
 seeds). In process: palette encoding 0.5 → 0.4 ms/chunk, NBT writes 0.18 → 0.08. Pregen with C2ME: 88.3, 95.8
 and 93.4 chunks/s against 85.9, 88.9 and 92.0 without it (+4 % on average), CPU per chunk 3 % lower.
 
+**Palette decoding for chunk loads** (`FastLoad`, redirects in `SerializableChunkData.parse`, on by default; off with
+`-Dhorizon.accel.load=false` or when another mod patches `parse`). C2ME's pregen reloads many chunks it saved a
+moment before, and each load decoded every section's palettes through DataFixerUpper. `parse` now gets wrapped
+container codecs: each palette entry's tag maps to what vanilla's codec decoded it to the first time, and vanilla's
+own `PalettedContainer.unpack` builds the container. An entry vanilla reports an error for, data that isn't a long
+array, or an unpack error goes to vanilla's codec whole, so errors and repairs stay vanilla's. Exact on 300 chunks
+(every value, palette order, bits). In process 2.5× faster (0.20 → 0.08 ms/chunk). Pregen with C2ME and
+ScalableLux, 6 alternating pairs: 93.4, 91.9, 91.9, 98.5, 99.0 and 100.8 chunks/s against 89.1, 88.5, 92.3, 93.7,
+96.6 and 100.0 (+2.8 %, 5 wins).
+
+**The baseline now includes ScalableLux**, the Starlight successor and the fastest light engine for 26.3; it
+composes with horizon-accel. C2ME + ScalableLux: 77.1, 73.5 and 74.7 chunks/s; with horizon-accel added: 92.2, 96.9
+and 97.1 (+27 %, CPU per chunk 15 % lower), alternating.
+
 ## What exists, and what it costs
 
 `crates/horizon-accel` puts Horizon's terrain generation behind a C ABI (a `cdylib`): open a dimension's

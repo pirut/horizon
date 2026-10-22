@@ -401,6 +401,39 @@ public final class VanillaTerrainBench {
             if (!Arrays.equals(bytes(tag, false), bytes(tag, true))) problem = "nbt bytes";
             if (problem != null && differ++ < 5) System.out.println("save chunk " + chunk.getPos() + ": " + problem);
         }
+        // Loads: each section's tags decoded by vanilla's codecs and by horizon-accel's, compared value by value.
+        int loadDiffer = 0;
+        var fastBlocks = dev.horizonlab.accel.mc.FastLoad.blockStatesAlways(factory);
+        var fastBiomes = dev.horizonlab.accel.mc.FastLoad.biomesAlways(factory);
+        List<net.minecraft.nbt.Tag[]> sectionTags = new ArrayList<>();
+        for (var chunk : chunks) {
+            String problem = null;
+            for (var section : chunk.getSections()) {
+                var blocks = factory.blockStatesContainerCodec().encodeStart(net.minecraft.nbt.NbtOps.INSTANCE, section.getStates()).getOrThrow();
+                var biomes = factory.biomeContainerCodec().encodeStart(net.minecraft.nbt.NbtOps.INSTANCE, section.getBiomes()).getOrThrow();
+                sectionTags.add(new net.minecraft.nbt.Tag[] {blocks, biomes});
+                String a = sameContainer(factory.blockStatesContainerCodec().parse(net.minecraft.nbt.NbtOps.INSTANCE, blocks).getOrThrow(),
+                        fastBlocks.parse(net.minecraft.nbt.NbtOps.INSTANCE, blocks).getOrThrow(), 16);
+                String b = sameContainer(factory.biomeContainerCodec().parse(net.minecraft.nbt.NbtOps.INSTANCE, biomes).getOrThrow(),
+                        fastBiomes.parse(net.minecraft.nbt.NbtOps.INSTANCE, biomes).getOrThrow(), 4);
+                if (a != null) problem = "block states " + a;
+                if (b != null) problem = "biomes " + b;
+            }
+            if (problem != null && loadDiffer++ < 5) System.out.println("load chunk " + chunk.getPos() + ": " + problem);
+        }
+        System.out.println("load parity " + (chunks.size() - loadDiffer) + "/" + chunks.size() + " chunks identical");
+        for (int rep = 0; rep < 3; rep++) {
+            long[] ns = new long[2];
+            for (int fast = 0; fast < 2; fast++) {
+                long start = System.nanoTime();
+                for (var tags : sectionTags) {
+                    (fast == 1 ? fastBlocks : factory.blockStatesContainerCodec()).parse(net.minecraft.nbt.NbtOps.INSTANCE, tags[0]).getOrThrow();
+                    (fast == 1 ? fastBiomes : factory.biomeContainerCodec()).parse(net.minecraft.nbt.NbtOps.INSTANCE, tags[1]).getOrThrow();
+                }
+                ns[fast] = System.nanoTime() - start;
+            }
+            System.out.printf("load timing: decode vanilla %.3f horizon %.3f ms/chunk%n", ns[0] / 1e6 / chunks.size(), ns[1] / 1e6 / chunks.size());
+        }
         // All the chunks in one tag, far past the write buffer's first size.
         var all = new net.minecraft.nbt.ListTag();
         for (var chunk : chunks) all.add(saveTag(chunk, factory, false));
@@ -424,6 +457,20 @@ public final class VanillaTerrainBench {
             System.out.printf("save timing: encode vanilla %.3f horizon %.3f, write vanilla %.3f horizon %.3f ms/chunk%n",
                     ns[0] / n, ns[2] / n, ns[1] / n, ns[3] / n);
         }
+    }
+
+    /** Where two decoded containers differ (values, palette order, bits), or null. */
+    static <T> String sameContainer(net.minecraft.world.level.chunk.PalettedContainerRO<T> a,
+            net.minecraft.world.level.chunk.PalettedContainerRO<T> b, int side) {
+        for (int y = 0; y < side; y++) for (int z = 0; z < side; z++) for (int x = 0; x < side; x++) {
+            if (!java.util.Objects.equals(a.get(x, y, z), b.get(x, y, z))) return "value at " + x + " " + y + " " + z;
+        }
+        var pa = new ArrayList<Object>();
+        var pb = new ArrayList<Object>();
+        a.forEachInPalette(pa::add);
+        b.forEachInPalette(pb::add);
+        if (!pa.equals(pb) || a.bitsPerEntry() != b.bitsPerEntry()) return "palette " + pa + " " + a.bitsPerEntry() + " against " + pb + " " + b.bitsPerEntry();
+        return null;
     }
 
     /** The sections part of {@code SerializableChunkData.write}: palettes, light left out. */
