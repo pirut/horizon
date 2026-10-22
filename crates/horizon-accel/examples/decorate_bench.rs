@@ -104,9 +104,15 @@ fn main() -> Result<(), String> {
     if std::env::var_os("DECORATE_COPY").is_some() {
         let mut copies: HashMap<(i32, i32), ProtoChunk> = HashMap::new();
         for &(x, z) in chunks.keys() {
-            copies.insert((x, z), worker.generate_proto(ChunkPos::new(x, z)).map_err(|e| e.to_string())?);
+            copies.insert(
+                (x, z),
+                worker
+                    .generate_proto(ChunkPos::new(x, z))
+                    .map_err(|e| e.to_string())?,
+            );
         }
-        let (mut copying, mut deco, mut ops) = (std::time::Duration::ZERO, std::time::Duration::ZERO, 0);
+        let (mut copying, mut deco, mut ops) =
+            (std::time::Duration::ZERO, std::time::Duration::ZERO, 0);
         for dz in -half..size - half {
             for dx in -half..size - half {
                 let (cx, cz) = (center.x + dx, center.z + dz);
@@ -119,32 +125,72 @@ fn main() -> Result<(), String> {
                         .map_while(|s| source.terrain.section(s))
                         .map(|section| {
                             let (palette, words) = section.packed();
-                            horizon_world::chunk::BlockSection::from_packed(palette, section.bits(), words, registry)
+                            horizon_world::chunk::BlockSection::from_packed(
+                                palette,
+                                section.bits(),
+                                words,
+                                registry,
+                            )
                         })
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|e| e.to_string())?;
                     let heightmaps: Vec<_> = horizon_world::heightmap::HeightmapType::ALL
                         .into_iter()
-                        .filter_map(|kind| source.terrain.heightmap(kind).map(|map| (kind, map.raw_data())))
+                        .filter_map(|kind| {
+                            source
+                                .terrain
+                                .heightmap(kind)
+                                .map(|map| (kind, map.raw_data()))
+                        })
                         .collect();
-                    let mut copy = worker.proto_from_sections(pos, sections, &heightmaps, i == 4).map_err(|e| e.to_string())?;
+                    let mut copy = worker
+                        .proto_from_sections(pos, sections, &heightmaps, i == 4)
+                        .map_err(|e| e.to_string())?;
                     if source.is_decorated() {
                         copy.set_decorated();
                     }
                     if std::env::var_os("DECORATE_DEBUG").is_some() {
                         use horizon_world::heightmap::HeightmapType as H;
-                        for kind in [H::OceanFloorWg, H::WorldSurfaceWg, H::MotionBlocking, H::MotionBlockingNoLeaves, H::OceanFloor, H::WorldSurface] {
-                            let (a, b) = (source.terrain.heightmap(kind), copy.terrain.heightmap(kind));
+                        for kind in [
+                            H::OceanFloorWg,
+                            H::WorldSurfaceWg,
+                            H::MotionBlocking,
+                            H::MotionBlockingNoLeaves,
+                            H::OceanFloor,
+                            H::WorldSurface,
+                        ] {
+                            let (a, b) =
+                                (source.terrain.heightmap(kind), copy.terrain.heightmap(kind));
                             let differ = match (a, b) {
-                                (Some(a), Some(b)) => (0..256).filter(|i| a.first_available(i % 16, i / 16).ok() != b.first_available(i % 16, i / 16).ok()).count(),
-                                (a, b) => if a.is_some() != b.is_some() { 999 } else { 0 },
+                                (Some(a), Some(b)) => (0..256)
+                                    .filter(|i| {
+                                        a.first_available(i % 16, i / 16).ok()
+                                            != b.first_available(i % 16, i / 16).ok()
+                                    })
+                                    .count(),
+                                (a, b) => {
+                                    if a.is_some() != b.is_some() {
+                                        999
+                                    } else {
+                                        0
+                                    }
+                                }
                             };
                             if differ > 0 {
-                                println!("chunk {:?} {kind:?}: {differ} columns differ (decorated {})", (pos.x, pos.z), source.is_decorated());
+                                println!(
+                                    "chunk {:?} {kind:?}: {differ} columns differ (decorated {})",
+                                    (pos.x, pos.z),
+                                    source.is_decorated()
+                                );
                             }
                         }
                         if i == 4 {
-                            println!("chunk {:?}: {} vs {} structure starts", (pos.x, pos.z), source.structure_start_count(), copy.structure_start_count());
+                            println!(
+                                "chunk {:?}: {} vs {} structure starts",
+                                (pos.x, pos.z),
+                                source.structure_start_count(),
+                                copy.structure_start_count()
+                            );
                         }
                     }
                     region.push(copy);
@@ -152,14 +198,18 @@ fn main() -> Result<(), String> {
                 let mut region: [ProtoChunk; 9] = region.try_into().map_err(|_| "region")?;
                 copying += clock.elapsed();
                 let clock = Instant::now();
-                let (_, log) = worker.decorate_logged(&mut region).map_err(|e| e.to_string())?;
+                let (_, log) = worker
+                    .decorate_logged(&mut region)
+                    .map_err(|e| e.to_string())?;
                 deco += clock.elapsed();
                 ops += log.len();
                 if std::env::var_os("DECORATE_DEBUG").is_some() {
                     let mut kinds = std::collections::BTreeMap::new();
                     for op in &log {
                         let name = format!("{op:?}");
-                        *kinds.entry(name.split('(').next().unwrap().to_owned()).or_insert(0) += 1;
+                        *kinds
+                            .entry(name.split('(').next().unwrap().to_owned())
+                            .or_insert(0) += 1;
                     }
                     println!("ops {kinds:?}");
                 }
@@ -180,7 +230,9 @@ fn main() -> Result<(), String> {
             let b = &copies[key];
             let mut same = true;
             for s in 0.. {
-                let (Some(x), Some(y)) = (a.terrain.section(s), b.terrain.section(s)) else { break };
+                let (Some(x), Some(y)) = (a.terrain.section(s), b.terrain.section(s)) else {
+                    break;
+                };
                 if (0..4096).any(|i| x.get(i).unwrap() != y.get(i).unwrap()) {
                     same = false;
                     break;
@@ -190,7 +242,11 @@ fn main() -> Result<(), String> {
                 differ += 1;
             }
         }
-        println!("{} of {} chunks identical", chunks.len() - differ, chunks.len());
+        println!(
+            "{} of {} chunks identical",
+            chunks.len() - differ,
+            chunks.len()
+        );
     }
     let n = (size * size) as f64;
     println!(

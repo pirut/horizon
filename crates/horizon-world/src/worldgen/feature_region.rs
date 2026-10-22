@@ -137,10 +137,7 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
         mut self,
         bindings: &super::block_feature::FeatureBlockBindings<'r>,
     ) -> Result<Self, RegionError> {
-        if !std::ptr::eq(
-            self.chunks[0].registry(),
-            bindings.registry(),
-        ) {
+        if !std::ptr::eq(self.chunks[0].registry(), bindings.registry()) {
             return Err(RegionError::InvalidBindings);
         }
         self.block_queries = Some(RegionBlockQueries {
@@ -219,7 +216,10 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
         if dx < 0 || dz < 0 || dx >= self.columns {
             return None;
         }
-        match *self.grid.get(dz as usize * self.columns as usize + dx as usize)? {
+        match *self
+            .grid
+            .get(dz as usize * self.columns as usize + dx as usize)?
+        {
             u32::MAX => None,
             i => Some(i as usize),
         }

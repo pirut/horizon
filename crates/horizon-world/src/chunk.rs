@@ -799,16 +799,31 @@ mod tests {
         let (palette, words) = section.packed();
         let loaded = BlockSection::from_packed(palette, section.bits(), words, &registry).unwrap();
         // A wider width than the palette needs, as a vanilla palette may have.
-        let wide = BlockSection::from_packed(palette, 8, &widen(words, section.bits(), 8), &registry).unwrap();
+        let wide =
+            BlockSection::from_packed(palette, 8, &widen(words, section.bits(), 8), &registry)
+                .unwrap();
         for i in 0..4096 {
             assert_eq!(loaded.get(i).unwrap(), section.get(i).unwrap());
             assert_eq!(wide.get(i).unwrap(), section.get(i).unwrap());
         }
-        let one = BlockSection::from_packed(&[BlockStateId(5), BlockStateId(9)], 4, &[0x1111_1111_1111_1111; 256], &registry)
-            .unwrap();
+        let one = BlockSection::from_packed(
+            &[BlockStateId(5), BlockStateId(9)],
+            4,
+            &[0x1111_1111_1111_1111; 256],
+            &registry,
+        )
+        .unwrap();
         assert_eq!(one.bits(), 0);
         assert_eq!(one.get(17).unwrap(), BlockStateId(9));
-        assert!(BlockSection::from_packed(&[BlockStateId(5)], 4, &[0x2222_2222_2222_2222; 256], &registry).is_err());
+        assert!(
+            BlockSection::from_packed(
+                &[BlockStateId(5)],
+                4,
+                &[0x2222_2222_2222_2222; 256],
+                &registry
+            )
+            .is_err()
+        );
     }
 
     fn widen(words: &[u64], from: u8, to: u8) -> Vec<u64> {

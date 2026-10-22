@@ -640,7 +640,9 @@ pub unsafe extern "C" fn horizon_accel_decorate(
                 std::slice::from_raw_parts(longs, longs_len),
             )
         };
-        Ok(Box::into_raw(Box::new(accel.decorate(cx, cz, ints, longs)?)))
+        Ok(Box::into_raw(Box::new(
+            accel.decorate(cx, cz, ints, longs)?,
+        )))
     })
 }
 
@@ -650,7 +652,10 @@ pub unsafe extern "C" fn horizon_accel_decorate(
 /// # Safety
 /// `decoration` must be live and `out` hold 6 writable `i64`s.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn horizon_accel_decoration_sizes(decoration: *const Decoration, out: *mut i64) {
+pub unsafe extern "C" fn horizon_accel_decoration_sizes(
+    decoration: *const Decoration,
+    out: *mut i64,
+) {
     // SAFETY: the caller passes a live decoration and a buffer of 6.
     let (d, out) = unsafe { (&*decoration, std::slice::from_raw_parts_mut(out, 6)) };
     out.copy_from_slice(&[

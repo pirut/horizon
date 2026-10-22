@@ -275,6 +275,31 @@ public final class VanillaTerrainBench {
      * Every chunk FEATURES wrote to (the square and its ring), decorated by vanilla in {@code a} and by the swap in
      * {@code b}: blocks, block entities, scheduled ticks, post-processing marks and heightmaps.
      */
+    /** Where horizon-accel's palette packing differs from vanilla's on this chunk, or null. */
+    static String packParity(ProtoChunk chunk, PalettedContainerFactory factory) {
+        for (int s = 0; s < chunk.getSections().length; s++) {
+            var section = chunk.getSections()[s];
+            String a = samePack(section.getStates(), factory.blockStatesStrategy());
+            if (a != null) return "block packing of section " + s + ": " + a;
+            String b = samePack((net.minecraft.world.level.chunk.PalettedContainer<net.minecraft.core.Holder<Biome>>) section.getBiomes(), factory.biomeStrategy());
+            if (b != null) return "biome packing of section " + s + ": " + b;
+        }
+        return null;
+    }
+
+    static <T> String samePack(net.minecraft.world.level.chunk.PalettedContainer<T> container, net.minecraft.world.level.chunk.Strategy<T> strategy) {
+        var fast = dev.horizonlab.accel.mc.FastPack.packAlways(container, strategy);
+        if (fast == null) return null;
+        var vanilla = container.pack(strategy);
+        long[] fa = fast.storage().map(java.util.stream.LongStream::toArray).orElse(null);
+        long[] va = vanilla.storage().map(java.util.stream.LongStream::toArray).orElse(null);
+        if (!fast.paletteEntries().equals(vanilla.paletteEntries()) || fast.bitsPerEntry() != vanilla.bitsPerEntry()
+                || !java.util.Arrays.equals(fa, va)) {
+            return "vanilla " + vanilla.paletteEntries() + " " + vanilla.bitsPerEntry() + " horizon " + fast.paletteEntries() + " " + fast.bitsPerEntry();
+        }
+        return null;
+    }
+
     static void featureParity(Map<Long, ProtoChunk> a, Map<Long, ProtoChunk> b, int x0, int z0, int x1, int z1,
             LevelHeightAccessor height, RegistryAccess access) {
         int checked = 0, differ = 0;
@@ -291,6 +316,31 @@ public final class VanillaTerrainBench {
                 if (va != vb && blocks++ == 0) problems.add(pos.toShortString() + " vanilla " + va + " horizon " + vb);
             }
             if (blocks > 1) problems.add(blocks + " blocks");
+            String pack = packParity(vanilla, PalettedContainerFactory.create(access));
+            if (pack == null) pack = packParity(ours, PalettedContainerFactory.create(access));
+            if (pack != null) problems.add(pack);
+            // Biomes, value by value and palette by palette (the palette's order is what a save writes).
+            for (int s = 0; s < vanilla.getSections().length; s++) {
+                var ba = vanilla.getSections()[s].getBiomes();
+                var bb = ours.getSections()[s].getBiomes();
+                String biomeProblem = null;
+                for (int i = 0; i < 64 && biomeProblem == null; i++) {
+                    if (!ba.get(i & 3, i >> 4, (i >> 2) & 3).equals(bb.get(i & 3, i >> 4, (i >> 2) & 3))) {
+                        biomeProblem = "biome " + i + " of section " + s;
+                    }
+                }
+                if (biomeProblem == null) {
+                    var pa = new ArrayList<Object>();
+                    var pb = new ArrayList<Object>();
+                    ba.forEachInPalette(pa::add);
+                    bb.forEachInPalette(pb::add);
+                    if (!pa.equals(pb) || ba.bitsPerEntry() != bb.bitsPerEntry()) biomeProblem = "biome order of section " + s;
+                }
+                if (biomeProblem != null) {
+                    problems.add(biomeProblem);
+                    break;
+                }
+            }
             if (!vanilla.getBlockEntityNbts().equals(ours.getBlockEntityNbts())) {
                 problems.add("block entity nbt: vanilla " + vanilla.getBlockEntityNbts() + " horizon " + ours.getBlockEntityNbts());
             }
