@@ -44,6 +44,15 @@ def jar(mods, prefix):
     return found[-1]
 
 
+def cpu_seconds(pid):
+    """The process's user and system CPU time so far (Linux; 0 elsewhere)."""
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
+    except (OSError, IndexError, ValueError):
+        return 0.0
+
+
 def run(config, options):
     world = RUNS / config
     if world.exists():
@@ -113,16 +122,19 @@ def run(config, options):
                     f"chunky radius {options.radius}", "chunky silent", "chunky start"]:
         send(command)
     began = time.time()
+    cpu_began = cpu_seconds(server.pid)
     wait(FINISHED.pattern, 7200)
     elapsed = time.time() - began
+    cpu = cpu_seconds(server.pid) - cpu_began
     send("stop")
     server.wait(timeout=300)
     log.close()
     side = (2 * options.radius // 16) + 1
     chunks = side * side
-    result = {"config": config, "boot_s": boot, "pregen_s": elapsed, "chunks": chunks, "cps": chunks / elapsed}
-    print(f"{config}: {chunks} chunks in {elapsed:.1f} s, {chunks / elapsed:.1f} chunks/s (boot {boot:.1f} s)",
-          flush=True)
+    result = {"config": config, "boot_s": boot, "pregen_s": elapsed, "chunks": chunks, "cps": chunks / elapsed,
+              "cpu_ms_per_chunk": cpu * 1000 / chunks}
+    print(f"{config}: {chunks} chunks in {elapsed:.1f} s, {chunks / elapsed:.1f} chunks/s, "
+          f"{cpu * 1000 / chunks:.1f} CPU ms/chunk (boot {boot:.1f} s)", flush=True)
     return result
 
 
