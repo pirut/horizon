@@ -198,6 +198,17 @@ one-value sections fills and scans 4,096 entries. `FastPack` maps old palette id
 packs one-value containers directly. The output is vanilla's exactly (palette order, bits, words; checked on every
 section in `fparity`). Pregen with C2ME: 90.2 and 88.5 chunks/s against 85.1 and 86.5 without it (+3 to 4 %).
 
+**The rest of the chunk save** (`FastSave`, mixins on `SerializableChunkData.write` and `NbtIo.write`, on by default;
+off with `-Dhorizon.accel.save=false` or when another mod patches either). After `FastPack`, saving was still a
+quarter of a C2ME + horizon-accel server's Java samples: DataFixerUpper encoding each section's palettes (every block
+state's name and properties rebuilt on every save), and `NbtIo.write` paying a locked `BufferedOutputStream` call
+per number (a section's block data is hundreds of `writeLong`s). `FastSave` builds the `{palette, data}` tags
+directly, with each entry's tag encoded by vanilla's codec once and copied after that, and writes the NBT through
+vanilla's own tag code into a plain byte array, handed to the stream in one call. Exact: each section's tags equal
+vanilla's, and the bytes match, also for a 3 MB tag that grows the buffer (`HORIZON_BENCH_SAVE`, 300 chunks, two
+seeds). In process: palette encoding 0.5 → 0.4 ms/chunk, NBT writes 0.18 → 0.08. Pregen with C2ME: 88.3, 95.8
+and 93.4 chunks/s against 85.9, 88.9 and 92.0 without it (+4 % on average), CPU per chunk 3 % lower.
+
 ## What exists, and what it costs
 
 `crates/horizon-accel` puts Horizon's terrain generation behind a C ABI (a `cdylib`): open a dimension's

@@ -271,10 +271,6 @@ public final class VanillaTerrainBench {
         System.out.println("parity " + (checked - differ) + "/" + checked + " chunks identical");
     }
 
-    /**
-     * Every chunk FEATURES wrote to (the square and its ring), decorated by vanilla in {@code a} and by the swap in
-     * {@code b}: blocks, block entities, scheduled ticks, post-processing marks and heightmaps.
-     */
     /** Where horizon-accel's palette packing differs from vanilla's on this chunk, or null. */
     static String packParity(ProtoChunk chunk, PalettedContainerFactory factory) {
         for (int s = 0; s < chunk.getSections().length; s++) {
@@ -300,6 +296,10 @@ public final class VanillaTerrainBench {
         return null;
     }
 
+    /**
+     * Every chunk FEATURES wrote to (the square and its ring), decorated by vanilla in {@code a} and by the swap in
+     * {@code b}: blocks, block entities, scheduled ticks, post-processing marks and heightmaps.
+     */
     static void featureParity(Map<Long, ProtoChunk> a, Map<Long, ProtoChunk> b, int x0, int z0, int x1, int z1,
             LevelHeightAccessor height, RegistryAccess access) {
         int checked = 0, differ = 0;
@@ -379,6 +379,80 @@ public final class VanillaTerrainBench {
             }
         }
         System.out.println("fparity " + (checked - differ) + "/" + checked + " chunks identical");
+    }
+
+    /**
+     * horizon-accel's chunk-save encoding against vanilla's on these chunks: each section's palettes as tags, and the
+     * whole tag as bytes, then both timed.
+     */
+    static void saveCheck(List<ProtoChunk> chunks, PalettedContainerFactory factory) throws java.io.IOException {
+        int differ = 0;
+        for (var chunk : chunks) {
+            String problem = null;
+            for (var section : chunk.getSections()) {
+                var a = factory.blockStatesContainerCodec().encodeStart(net.minecraft.nbt.NbtOps.INSTANCE, section.getStates()).getOrThrow();
+                var b = dev.horizonlab.accel.mc.FastSave.encodeAlways(factory.blockStatesContainerCodec(), factory.blockStatesStrategy(), section.getStates());
+                if (!a.equals(b)) problem = "block states: vanilla " + a + " horizon " + b;
+                var c = factory.biomeContainerCodec().encodeStart(net.minecraft.nbt.NbtOps.INSTANCE, section.getBiomes()).getOrThrow();
+                var d = dev.horizonlab.accel.mc.FastSave.encodeAlways(factory.biomeContainerCodec(), factory.biomeStrategy(), section.getBiomes());
+                if (!c.equals(d)) problem = "biomes: vanilla " + c + " horizon " + d;
+            }
+            var tag = saveTag(chunk, factory, false);
+            if (!Arrays.equals(bytes(tag, false), bytes(tag, true))) problem = "nbt bytes";
+            if (problem != null && differ++ < 5) System.out.println("save chunk " + chunk.getPos() + ": " + problem);
+        }
+        // All the chunks in one tag, far past the write buffer's first size.
+        var all = new net.minecraft.nbt.ListTag();
+        for (var chunk : chunks) all.add(saveTag(chunk, factory, false));
+        var whole = new net.minecraft.nbt.CompoundTag();
+        whole.put("chunks", all);
+        byte[] vanillaBytes = bytes(whole, false);
+        System.out.println("save parity " + (chunks.size() - differ) + "/" + chunks.size() + " chunks identical, "
+                + vanillaBytes.length + " bytes together " + (Arrays.equals(vanillaBytes, bytes(whole, true)) ? "identical" : "DIFFER"));
+        for (int rep = 0; rep < 5; rep++) {
+            long[] ns = new long[4];
+            for (int fast = 0; fast < 2; fast++) {
+                long start = System.nanoTime();
+                List<net.minecraft.nbt.CompoundTag> tags = new ArrayList<>();
+                for (var chunk : chunks) tags.add(saveTag(chunk, factory, fast == 1));
+                ns[fast * 2] = System.nanoTime() - start;
+                start = System.nanoTime();
+                for (var tag : tags) bytes(tag, fast == 1);
+                ns[fast * 2 + 1] = System.nanoTime() - start;
+            }
+            double n = chunks.size() * 1e6;
+            System.out.printf("save timing: encode vanilla %.3f horizon %.3f, write vanilla %.3f horizon %.3f ms/chunk%n",
+                    ns[0] / n, ns[2] / n, ns[1] / n, ns[3] / n);
+        }
+    }
+
+    /** The sections part of {@code SerializableChunkData.write}: palettes, light left out. */
+    static net.minecraft.nbt.CompoundTag saveTag(ProtoChunk chunk, PalettedContainerFactory factory, boolean fast) {
+        var sections = new net.minecraft.nbt.ListTag();
+        for (int s = 0; s < chunk.getSections().length; s++) {
+            var section = chunk.getSections()[s];
+            var tag = new net.minecraft.nbt.CompoundTag();
+            if (!fast || !dev.horizonlab.accel.mc.FastSave.storeAlways(tag, "block_states", factory.blockStatesContainerCodec(), section.getStates(), factory)) {
+                tag.store("block_states", factory.blockStatesContainerCodec(), section.getStates());
+            }
+            if (!fast || !dev.horizonlab.accel.mc.FastSave.storeAlways(tag, "biomes", factory.biomeContainerCodec(), section.getBiomes(), factory)) {
+                tag.store("biomes", factory.biomeContainerCodec(), section.getBiomes());
+            }
+            tag.putByte("Y", (byte) (chunk.getMinSectionY() + s));
+            sections.add(tag);
+        }
+        var out = new net.minecraft.nbt.CompoundTag();
+        out.put("sections", sections);
+        return out;
+    }
+
+    static byte[] bytes(net.minecraft.nbt.CompoundTag tag, boolean fast) throws java.io.IOException {
+        var bytes = new java.io.ByteArrayOutputStream();
+        try (var out = new java.io.DataOutputStream(new java.io.BufferedOutputStream(bytes))) {
+            if (fast) dev.horizonlab.accel.mc.FastSave.writeAlways(tag, out);
+            else net.minecraft.nbt.NbtIo.write(tag, out);
+        }
+        return bytes.toByteArray();
     }
 
     public static void main(String[] args) throws Exception {
@@ -576,6 +650,12 @@ public final class VanillaTerrainBench {
                     vanillaRun = new HashMap<>(chunks);
                 } else if (fparity) {
                     featureParity(vanillaRun, chunks, x0, z0, x1, z1, height, access);
+                }
+                // HORIZON_BENCH_SAVE: check and time horizon-accel's chunk-save encoding on the decorated square.
+                if (System.getenv("HORIZON_BENCH_SAVE") != null && round >= warmup) {
+                    List<ProtoChunk> square = new ArrayList<>();
+                    for (int z = z0; z <= z1; z++) for (int x = x0; x <= x1; x++) square.add(chunkAt.apply(x, z));
+                    saveCheck(square, factory);
                 }
                 if (swapFeatures) System.out.println("features: " + fallbacks + " chunks fell back to vanilla so far; " + swap.features().summary());
             }
