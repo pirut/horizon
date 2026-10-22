@@ -38,16 +38,20 @@ Platform's `CubicBench` measures (`EARTH_BENCH=<cache> EARTH_BENCH_NEAR=1 ./grad
 on the same places and threads. Cloud container, 4 vCPU, every request through an HTTPS proxy (about 0.75 s a
 request), so first visits are network-bound; on a home connection the fetch times shrink, the CPU times don't.
 
-Yosemite Valley, first visit (empty cache), 4 threads:
+Time until a player can play, in seconds: the data the cubes around them read, the landing spot search, and the
+6,357 cubes Earth Platform keeps around a player (12 across, 6 up and down), 4 threads. First visit is an empty
+cache; return visit is the same place again from disk.
 
-| | Earth Platform | horizon-earth |
-| --- | --- | --- |
-| Data the cubes need | 6.8 s, 263 files, 43 MB | 2.9 s, 22 files, 2.3 MB |
-| Landing spot search | 1.5 s | 2 ms |
-| The 6,357 cubes around the player | 7.0 s | 21 ms |
-| **Until the player can play** | **15.3 s** | **2.9 s** |
+| Place | Earth Platform, first visit | horizon-earth, first visit | Earth Platform, return | horizon-earth, return |
+| --- | --- | --- | --- | --- |
+| Yosemite Valley | 15.3 (6.8 + 1.5 + 7.0) | 2.5 (2.52 + 0.00 + 0.02) | 8.0 (2.3 + 1.7 + 4.0) | 0.04 |
+| Lake Tahoe | 15.4 (7.1 + 3.5 + 4.8) | 1.6 (1.55 + 0.00 + 0.02) | 8.8 (2.2 + 1.7 + 4.8) | 0.05 |
+| Amazon tributaries | 14.8 (5.6 + 3.2 + 6.0) | 1.5 (1.41 + 0.00 + 0.08) | 9.3 (2.1 + 1.8 + 5.5) | 0.06 |
+| Tokyo | 16.1 (6.4 + 5.3 + 4.4) | 1.4 (1.41 + 0.00 + 0.02) | 8.7 (2.1 + 2.1 + 4.5) | 0.05 |
 
-Return visits, the other places and far terrain: see the tables in the pull request that adds each stage.
+Far terrain, all eight levels (about 17,000 columns of 16 x 16 voxels, out to about 94 km), CPU time of one
+thread on a return visit: Earth Platform 277 to 598 s (estimated from 150 columns a level), horizon-earth 45 to
+49 s (every column).
 
 **What the Rust cubes don't have yet**, so the cube numbers are not like for like: caves, ores, trees and plants,
 vanilla structures, rock strata, rivers and streams traced from JRC water and the valleys, the national elevation
