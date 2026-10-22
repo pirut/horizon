@@ -12,6 +12,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.LongStream;
 import net.minecraft.commands.arguments.blocks.BlockStateParser;
+import net.minecraft.core.Holder;
+import net.minecraft.core.QuartPos;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
@@ -34,7 +36,11 @@ import net.minecraft.world.level.levelgen.Heightmap;
  * <p>What the status leaves behind, and how it gets here: the blocks (each section replaced), the
  * post-processing marks (aquifer fluids that must tick, as vanilla's {@code markPosForPostprocessing}), and the
  * two world-generation heightmaps, primed from the final blocks, which is what vanilla's incremental updates
- * arrive at. Biomes stay as vanilla's BIOMES status wrote them; Horizon's are the same (its parity harness checks).
+ * arrive at.
+ *
+ * <p>The BIOMES status comes from Horizon too ({@link #biomes}): its biome stage alone, written through vanilla's own
+ * {@code fillBiomesFromNoise} so the containers come out as vanilla builds them. Horizon keeps those biomes, so
+ * generating the chunk's terrain (which reads the 3×3 around it) doesn't sample them again.
  */
 public final class TerrainSwap {
     private static final Strategy<BlockState> STATES = Strategy.createForBlockStates(Block.BLOCK_STATE_REGISTRY);
@@ -45,9 +51,13 @@ public final class TerrainSwap {
     /** Horizon block state names the game has no state for: each one turns the swap off. */
     private final List<String> unmapped;
 
-    private TerrainSwap(HorizonAccel.Generator generator, List<String> unmapped) {
+    /** The game's biome for each registry id. */
+    private final Holder<Biome>[] biomeHolders;
+
+    private TerrainSwap(HorizonAccel.Generator generator, List<String> unmapped, Holder<Biome>[] biomeHolders) {
         this.generator = generator;
         this.unmapped = unmapped;
+        this.biomeHolders = biomeHolders;
     }
 
     /**
@@ -66,7 +76,12 @@ public final class TerrainSwap {
         });
         generator.mapBiomes(biomeIds.ids());
         List<String> unmapped = new ArrayList<>(states.missing());
-        return new TerrainSwap(generator, unmapped);
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        Holder<Biome>[] holders = new Holder[biomes.size()];
+        for (int id = 0; id < holders.length; id++) {
+            holders[id] = biomes.get(id).orElse(null);
+        }
+        return new TerrainSwap(generator, unmapped, holders);
     }
 
     private static int stateId(String name) {
@@ -96,6 +111,21 @@ public final class TerrainSwap {
     public List<String> problems() {
         return unmapped.isEmpty() ? List.of() : List.of(unmapped.size() + " block states unmapped, first "
                 + unmapped.getFirst());
+    }
+
+    /** Fills {@code chunk}'s biomes as vanilla's {@code createBiomes} would, and returns it. */
+    public ChunkAccess biomes(ChunkAccess chunk) {
+        int sections = chunk.getSectionsCount();
+        int[] ids = new int[sections * 64];
+        generator.biomes(chunk.getPos().x(), chunk.getPos().z(), ids);
+        int minQuartY = QuartPos.fromBlock(chunk.getMinY());
+        int quartX = QuartPos.fromBlock(chunk.getPos().getMinBlockX());
+        int quartZ = QuartPos.fromBlock(chunk.getPos().getMinBlockZ());
+        chunk.fillBiomesFromNoise((x, y, z) -> {
+            int qy = Math.clamp(y - minQuartY, 0, sections * 4 - 1);
+            return biomeHolders[ids[qy << 4 | (z - quartZ) << 2 | (x - quartX)]];
+        });
+        return chunk;
     }
 
     /** Fills {@code chunk} as vanilla's {@code buildTerrain} would, and returns it. */

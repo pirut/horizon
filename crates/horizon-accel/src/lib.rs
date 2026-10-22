@@ -29,7 +29,7 @@ use std::{
 };
 
 /// Bumped whenever a signature or a layout below changes.
-pub const ABI: u32 = 3;
+pub const ABI: u32 = 4;
 
 /// One dimension's generator, shared by every Java worldgen thread.
 pub struct Accel {
@@ -235,6 +235,30 @@ impl Accel {
             let (x, z, y) = (i & 3, (i >> 2) & 3, i >> 4);
             let BiomeId(id) = chunk.proto.biome_id_at(x * 4, min_y + y * 4, z * 4);
             *slot = map.map_or(id as i32, |m| m[id as usize]);
+        }
+        Ok(())
+    }
+
+    /// The chunk's biomes alone (vanilla's BIOMES status), laid out as in
+    /// [`Accel::biomes`]. Horizon keeps them for generating the chunk later.
+    pub fn biomes_only(&self, x: i32, z: i32, out: &mut [i32]) -> Result<(), String> {
+        let (_, height) = self.generator.level_range();
+        if out.len() != (height / 16) as usize * 64 {
+            return Err(format!("{} biomes, not {}", height / 16 * 64, out.len()));
+        }
+        let worker = self.workers.lock().unwrap().pop();
+        let mut worker = worker.unwrap_or_else(|| self.generator.worker());
+        let result = worker.biomes(ChunkPos::new(x, z));
+        self.workers.lock().unwrap().push(worker);
+        let chunk = result.map_err(|e| e.to_string())?;
+        let map = self.biome_map.get();
+        let mut section = 0;
+        let mut slots = out.chunks_exact_mut(64);
+        while let (Some(biomes), Some(slots)) = (chunk.section(section), slots.next()) {
+            for (slot, &BiomeId(id)) in slots.iter_mut().zip(biomes) {
+                *slot = map.map_or(id as i32, |m| m[id as usize]);
+            }
+            section += 1;
         }
         Ok(())
     }
@@ -524,6 +548,27 @@ pub unsafe extern "C" fn horizon_accel_chunk_section(
             *out = word as i64;
         }
         Ok(0)
+    })
+}
+
+/// Writes chunk (`x`, `z`)'s biomes alone into `out` (`height * 4` ints,
+/// layout in [`Accel::biomes`]), keeping them for its generation. 0 on
+/// success, -1 on error. Thread-safe.
+///
+/// # Safety
+/// `accel` must be open and `out` hold `len` writable ints.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn horizon_accel_biomes(
+    accel: *const Accel,
+    x: i32,
+    z: i32,
+    out: *mut i32,
+    len: usize,
+) -> i32 {
+    guard(-1, || {
+        // SAFETY: the caller passes an open generator and a valid buffer.
+        let (accel, out) = unsafe { (&*accel, std::slice::from_raw_parts_mut(out, len)) };
+        accel.biomes_only(x, z, out).map(|()| 0)
     })
 }
 

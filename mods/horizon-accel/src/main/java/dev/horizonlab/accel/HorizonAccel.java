@@ -19,7 +19,7 @@ import java.nio.file.Path;
  * garbage collector keeps running meanwhile.
  */
 public final class HorizonAccel {
-    public static final int ABI = 3;
+    public static final int ABI = 4;
 
     private static final ValueLayout.OfInt I32 = ValueLayout.JAVA_INT;
     private static final ValueLayout.OfLong I64 = ValueLayout.JAVA_LONG;
@@ -28,7 +28,7 @@ public final class HorizonAccel {
 
     final MethodHandle abi, noop, noopCritical, sum, error, open, close, stateCount, stateName,
             biomeCount, biomeName, mapStates, mapBiomes, generate, chunkBounds, chunkBlocks, chunkSection, chunkBiomes,
-            chunkPostprocessing, chunkFree, stageTimings, decorate, decorationSizes, decorationCopy, decorationFree, chunkKeep, forget;
+            chunkPostprocessing, chunkFree, stageTimings, decorate, decorationSizes, decorationCopy, decorationFree, chunkKeep, forget, biomes;
 
     private HorizonAccel(SymbolLookup lookup) {
         abi = link(lookup, "horizon_accel_abi", FunctionDescriptor.of(I32), false);
@@ -60,6 +60,7 @@ public final class HorizonAccel {
         decorationFree = link(lookup, "horizon_accel_decoration_free", FunctionDescriptor.ofVoid(PTR), false);
         chunkKeep = link(lookup, "horizon_accel_chunk_keep", FunctionDescriptor.of(I32, PTR, PTR, I64, I32, PTR, SIZE), true);
         forget = link(lookup, "horizon_accel_forget", FunctionDescriptor.ofVoid(PTR, PTR, SIZE), true);
+        biomes = link(lookup, "horizon_accel_biomes", FunctionDescriptor.of(I32, PTR, I32, I32, PTR, SIZE), false);
     }
 
     private static MethodHandle link(SymbolLookup lookup, String name, FunctionDescriptor descriptor, boolean critical) {
@@ -222,6 +223,20 @@ public final class HorizonAccel {
                 MemorySegment taken = native_;
                 native_ = null;
                 return taken;
+            }
+        }
+
+        /**
+         * Chunk ({@code x}, {@code z})'s biomes alone, 64 per section from the bottom in vanilla's order
+         * ({@code y << 4 | z << 2 | x}), as the game's ids once mapped, into {@code out}. Horizon keeps them for
+         * generating the chunk.
+         */
+        public void biomes(int x, int z, int[] out) {
+            // Not a critical call (it can take a millisecond), so the output goes through native memory.
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment ids = arena.allocate(ValueLayout.JAVA_INT, out.length);
+                check((int) call(() -> (int) biomes.invokeExact(handle, x, z, ids, (long) out.length)));
+                MemorySegment.copy(ids, ValueLayout.JAVA_INT, 0, out, 0, out.length);
             }
         }
 

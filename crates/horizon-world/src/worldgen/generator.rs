@@ -1534,6 +1534,11 @@ trait SeededPipeline: Send + Sync {
     fn data(&self) -> &Arc<GeneratorData>;
     fn sea_level(&self) -> i32;
     fn level_range(&self) -> (i32, i32);
+    fn biomes(
+        &self,
+        worker: &mut WorkerState,
+        pos: ChunkPos,
+    ) -> Result<Arc<BiomeChunk<BiomeId>>, GeneratorError>;
     fn surface_sample(
         &self,
         worker: &mut WorkerState,
@@ -1678,6 +1683,16 @@ where
     }
     fn level_range(&self) -> (i32, i32) {
         (self.settings.level_min_y, self.settings.level_height)
+    }
+    fn biomes(
+        &self,
+        worker: &mut WorkerState,
+        pos: ChunkPos,
+    ) -> Result<Arc<BiomeChunk<BiomeId>>, GeneratorError> {
+        let clock = std::time::Instant::now();
+        let chunk = self.biome_chunk(worker, pos);
+        worker.timings.biomes += clock.elapsed();
+        chunk
     }
     fn structure_starts(
         &self,
@@ -2396,6 +2411,11 @@ impl GeneratorWorker {
         let result = self.pipeline.generate(&mut self.state, pos);
         self.state.timings.chunks += 1;
         result
+    }
+    /// The chunk's biomes (vanilla's BIOMES status), kept in the generator's
+    /// biome cache, where [`GeneratorWorker::generate_proto`] finds them.
+    pub fn biomes(&mut self, pos: ChunkPos) -> Result<Arc<BiomeChunk<BiomeId>>, GeneratorError> {
+        self.pipeline.biomes(&mut self.state, pos)
     }
     /// A TERRAIN-status chunk from blocks generated elsewhere (one section per
     /// 16 blocks of the level's height, from the bottom), with this world's
