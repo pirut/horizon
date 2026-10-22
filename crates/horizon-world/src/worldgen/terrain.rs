@@ -359,6 +359,10 @@ impl<'r, B: TerrainBlockStates> TerrainChunk<'r, B> {
         &self.postprocessing
     }
 
+    /// Drops every heightmap; reads prime them again.
+    pub fn clear_heightmaps(&mut self) {
+        self.heightmaps.iter_mut().for_each(|map| *map = None);
+    }
     pub fn ensure_heightmap(&mut self, kind: HeightmapType) -> &mut Heightmap {
         self.heightmaps[kind as usize].get_or_insert_with(|| {
             Heightmap::new(kind, self.blocks.min_y, self.blocks.height)
@@ -386,6 +390,21 @@ impl<'r, B: TerrainBlockStates> TerrainChunk<'r, B> {
             self.blocks.non_air[section] -= 1;
         }
         Ok(old)
+    }
+    /// Replace a whole section (as copied from another chunk representation).
+    /// Heightmaps are not updated; prime them afterwards.
+    pub fn set_section(&mut self, index: usize, section: BlockSection<'r>) -> Result<(), TerrainError> {
+        if index >= self.blocks.sections.len() {
+            return Err(TerrainError::OutsideBuildHeight);
+        }
+        let properties = &self.blocks.properties;
+        self.blocks.non_air[index] = section
+            .state_counts()
+            .filter(|(state, _)| !properties.heightmap_state(*state).is_air())
+            .map(|(_, count)| count)
+            .sum();
+        self.blocks.sections[index] = section;
+        Ok(())
     }
     pub fn update_heightmap(
         &mut self,

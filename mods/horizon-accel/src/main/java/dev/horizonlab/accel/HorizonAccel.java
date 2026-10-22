@@ -19,7 +19,7 @@ import java.nio.file.Path;
  * garbage collector keeps running meanwhile.
  */
 public final class HorizonAccel {
-    public static final int ABI = 2;
+    public static final int ABI = 3;
 
     private static final ValueLayout.OfInt I32 = ValueLayout.JAVA_INT;
     private static final ValueLayout.OfLong I64 = ValueLayout.JAVA_LONG;
@@ -28,7 +28,7 @@ public final class HorizonAccel {
 
     final MethodHandle abi, noop, noopCritical, sum, error, open, close, stateCount, stateName,
             biomeCount, biomeName, mapStates, mapBiomes, generate, chunkBounds, chunkBlocks, chunkSection, chunkBiomes,
-            chunkPostprocessing, chunkFree, stageTimings;
+            chunkPostprocessing, chunkFree, stageTimings, decorate, decorationSizes, decorationCopy, decorationFree, chunkKeep, forget;
 
     private HorizonAccel(SymbolLookup lookup) {
         abi = link(lookup, "horizon_accel_abi", FunctionDescriptor.of(I32), false);
@@ -54,6 +54,12 @@ public final class HorizonAccel {
                 FunctionDescriptor.of(SIZE, PTR, I32, PTR, SIZE), true);
         chunkFree = link(lookup, "horizon_accel_chunk_free", FunctionDescriptor.ofVoid(PTR), false);
         stageTimings = link(lookup, "horizon_accel_stage_timings", FunctionDescriptor.of(I32, PTR, PTR, SIZE), true);
+        decorate = link(lookup, "horizon_accel_decorate", FunctionDescriptor.of(PTR, PTR, I32, I32, PTR, SIZE, PTR, SIZE), false);
+        decorationSizes = link(lookup, "horizon_accel_decoration_sizes", FunctionDescriptor.ofVoid(PTR, PTR), true);
+        decorationCopy = link(lookup, "horizon_accel_decoration_copy", FunctionDescriptor.of(I32, PTR, PTR, SIZE, PTR, SIZE), true);
+        decorationFree = link(lookup, "horizon_accel_decoration_free", FunctionDescriptor.ofVoid(PTR), false);
+        chunkKeep = link(lookup, "horizon_accel_chunk_keep", FunctionDescriptor.of(I32, PTR, PTR, I64, I32, PTR, SIZE), true);
+        forget = link(lookup, "horizon_accel_forget", FunctionDescriptor.ofVoid(PTR, PTR, SIZE), true);
     }
 
     private static MethodHandle link(SymbolLookup lookup, String name, FunctionDescriptor descriptor, boolean critical) {
@@ -113,10 +119,21 @@ public final class HorizonAccel {
 
         /** Chunk ({@code x}, {@code z}) up to vanilla's carvers status, in the caller's ids once mapped. */
         public Chunk generate(int x, int z) {
+            Generated generated = generateKeepable(x, z);
+            generated.free();
+            return generated.chunk();
+        }
+
+        /**
+         * As {@link #generate}, with Horizon's copy still open: {@link Generated#keep} hands it back for decorating
+         * the chunk later without copying it in, {@link Generated#free} drops it. One of them must be called.
+         */
+        public Generated generateKeepable(int x, int z) {
             MemorySegment chunk = (MemorySegment) call(() -> (MemorySegment) generate.invokeExact(handle, x, z));
             if (chunk.equals(MemorySegment.NULL)) {
                 throw new IllegalStateException(lastError());
             }
+            boolean done = false;
             try {
                 int[] bounds = new int[2];
                 MemorySegment minY = MemorySegment.ofArray(bounds).asSlice(0, 4);
@@ -153,13 +170,67 @@ public final class HorizonAccel {
                         call(() -> (long) chunkPostprocessing.invokeExact(chunk, section, out, n));
                     }
                 }
-                return new Chunk(x, z, bounds[0], bounds[1], packed, biomes, post);
+                done = true;
+                return new Generated(new Chunk(x, z, bounds[0], bounds[1], packed, biomes, post), chunk);
             } finally {
+                if (!done) {
+                    call(() -> {
+                        chunkFree.invokeExact(chunk);
+                        return null;
+                    });
+                }
+            }
+        }
+
+        /** A generated chunk with Horizon's own copy still open. */
+        public final class Generated {
+            private final Chunk chunk;
+            private MemorySegment native_;
+
+            private Generated(Chunk chunk, MemorySegment native_) {
+                this.chunk = chunk;
+                this.native_ = native_;
+            }
+
+            public Chunk chunk() {
+                return chunk;
+            }
+
+            /**
+             * Keeps Horizon's copy under {@code token}, with the heightmaps the caller's copy ended up with: bit
+             * {@code i} of {@code mask} for vanilla's {@code Heightmap.Types} ordinal {@code i}, their raw words in
+             * order in {@code words}.
+             */
+            public void keep(long token, int mask, long[] words) {
+                MemorySegment kept = take();
+                check((int) call(() -> (int) chunkKeep.invokeExact(handle, kept, token, mask,
+                        MemorySegment.ofArray(words), (long) words.length)));
+            }
+
+            public void free() {
+                MemorySegment freed = take();
                 call(() -> {
-                    chunkFree.invokeExact(chunk);
+                    chunkFree.invokeExact(freed);
                     return null;
                 });
             }
+
+            private MemorySegment take() {
+                if (native_ == null) {
+                    throw new IllegalStateException("already kept or freed");
+                }
+                MemorySegment taken = native_;
+                native_ = null;
+                return taken;
+            }
+        }
+
+        /** Drops the chunks kept under {@code tokens}. */
+        public void forget(long[] tokens) {
+            call(() -> {
+                forget.invokeExact(handle, MemorySegment.ofArray(tokens), (long) tokens.length);
+                return null;
+            });
         }
 
         /**
@@ -170,6 +241,47 @@ public final class HorizonAccel {
             long[] out = new long[6];
             check((int) call(() -> (int) stageTimings.invokeExact(handle, MemorySegment.ofArray(out), (long) out.length)));
             return out;
+        }
+
+        /**
+         * Decorates chunk ({@code cx}, {@code cz}) (vanilla's FEATURES status) on a copy of its 3×3 region, given as
+         * the first {@code intCount} of {@code ints} and {@code longCount} of {@code longs} (layout in
+         * {@code crates/horizon-accel/src/decorate.rs}), and returns the writes for the caller to repeat. Null when a
+         * chunk named as kept is no longer kept: send them all in full.
+         */
+        public Decoration decorate(int cx, int cz, int[] ints, int intCount, long[] longs, int longCount) {
+            MemorySegment result;
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment in = arena.allocate(I32, Math.max(1, intCount));
+                MemorySegment.copy(ints, 0, in, I32, 0, intCount);
+                MemorySegment words = arena.allocate(I64, Math.max(1, longCount));
+                MemorySegment.copy(longs, 0, words, I64, 0, longCount);
+                result = (MemorySegment) call(() -> (MemorySegment) decorate.invokeExact(handle, cx, cz, in,
+                        (long) intCount, words, (long) longCount));
+            }
+            if (result.equals(MemorySegment.NULL)) {
+                throw new IllegalStateException(lastError());
+            }
+            try {
+                long[] sizes = new long[6];
+                call(() -> {
+                    decorationSizes.invokeExact(result, MemorySegment.ofArray(sizes));
+                    return null;
+                });
+                if (sizes[5] != 0) {
+                    return null;
+                }
+                int[] ops = new int[(int) sizes[0]];
+                byte[] strings = new byte[(int) sizes[1]];
+                check((int) call(() -> (int) decorationCopy.invokeExact(result, MemorySegment.ofArray(ops),
+                        (long) ops.length, MemorySegment.ofArray(strings), (long) strings.length)));
+                return new Decoration(ops, strings, (int) sizes[2], sizes[3], sizes[4]);
+            } finally {
+                call(() -> {
+                    decorationFree.invokeExact(result);
+                    return null;
+                });
+            }
         }
 
         @Override
@@ -213,6 +325,28 @@ public final class HorizonAccel {
             for (int i = 0; i < 4096; i++) {
                 out[offset + i] = palette[(int) ((words[i / perWord] >>> (i % perWord * bits)) & mask)];
             }
+        }
+    }
+
+    /**
+     * A decorated region's writes, {@link #RECORD} ints each ({@code [kind, x, y, z, a, b, c]}, kinds in
+     * {@code decorate.rs}), and the strings they name (NUL-terminated, at byte offsets). {@code unsupported}: writes
+     * the caller can't repeat or features Horizon couldn't run; nonzero means decorate with vanilla instead.
+     */
+    public record Decoration(int[] ops, byte[] strings, int unsupported, long copyNanos, long decorateNanos) {
+        public static final int RECORD = 7;
+
+        public String string(int offset) {
+            int end = offset;
+            while (strings[end] != 0) {
+                end++;
+            }
+            return new String(strings, offset, end - offset, StandardCharsets.UTF_8);
+        }
+
+        /** Binary NBT ({@code length} bytes at {@code offset}), as vanilla's {@code NbtIo.readAnyTag} reads it. */
+        public java.io.DataInputStream bytes(int offset, int length) {
+            return new java.io.DataInputStream(new java.io.ByteArrayInputStream(strings, offset, length));
         }
     }
 

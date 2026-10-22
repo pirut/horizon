@@ -315,6 +315,7 @@ impl Decoration {
             block_entities.append(&mut chunk.block_entities);
         }
         let mut world = World {
+            log: worker.decoration_log.take(),
             block_entities,
             entities: Vec::new(),
             level_random,
@@ -409,6 +410,7 @@ impl Decoration {
                 Ok(placed.unwrap_or(false))
             },
         );
+        worker.decoration_log = world.log.take();
         for (pos, nbt) in std::mem::take(&mut world.block_entities) {
             let index = ((pos[2] >> 4).wrapping_sub(center.z) + 1) * 3
                 + (pos[0] >> 4).wrapping_sub(center.x)
@@ -448,9 +450,38 @@ impl Decoration {
     }
 }
 
+/// One world write made while decorating, as the Java call that makes it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DecorationOp {
+    /// `WorldGenRegion.setBlock(pos, state, flags)`, inside the write zone.
+    SetBlock([i32; 3], BlockStateId, i32),
+    /// `ChunkAccess.setBlockState(pos, state)` on the chunk holding `pos`.
+    SetChunkBlock([i32; 3], BlockStateId),
+    /// `LevelChunkSection.setBlockState` (BulkSectionAccess).
+    SetSectionBlock([i32; 3], BlockStateId),
+    /// `scheduleTick(pos, block, delay)`, the block named by its default state.
+    BlockTick([i32; 3], BlockStateId, i32),
+    /// `scheduleTick(pos, fluid, delay)`.
+    FluidTick([i32; 3], FluidKind, i32),
+    /// `ChunkAccess.markPosForPostprocessing(pos)`.
+    PostProcess([i32; 3]),
+    /// `SpawnerBlockEntity.setEntityId` on the spawner at `pos`, if one is there.
+    Spawner([i32; 3], String),
+    /// `RandomizableContainer.setLootTable(table, seed)` on the container at `pos`, if one is there.
+    LootTable([i32; 3], String, i64),
+    /// Any other block-entity data loaded at `pos`.
+    BlockEntity([i32; 3], crate::nbt::Compound),
+    /// An entity added from its NBT (absolute `Pos`).
+    Entity(crate::nbt::Compound),
+    /// A heightmap the chunk holding column `[x, z]` lacked, primed when first
+    /// read (`ChunkAccess.getHeight`).
+    PrimeHeightmap([i32; 2], HeightmapType),
+}
+
 /// WorldGenRegion-style view: reads anywhere in the 3×3 region, writes within
 /// the FEATURES step's write radius, biome lookups through the biome zoom.
 struct World<'a> {
+    log: Option<Vec<DecorationOp>>,
     block_entities: Vec<([i32; 3], crate::nbt::Compound)>,
     entities: Vec<crate::nbt::Compound>,
     level_random: &'a mut dyn super::structure::legacy::PieceRandom,
@@ -502,6 +533,20 @@ impl crate::level::LevelAccess for ShapeLevel<'_, '_> {
     }
 }
 impl World<'_> {
+    fn store_block_entity(
+        &mut self,
+        position: [i32; 3],
+        nbt: crate::nbt::Compound,
+    ) -> Result<(), PlacementQueryError> {
+        self.block_entities.retain(|(p, _)| *p != position);
+        self.block_entities.push((position, nbt));
+        Ok(())
+    }
+    fn record(&mut self, op: impl FnOnce() -> DecorationOp) {
+        if let Some(log) = &mut self.log {
+            log.push(op());
+        }
+    }
     /// `BlockState.updateShape` of the state at `pos` against `neighbor`.
     fn shape_update(
         &self,
@@ -589,6 +634,7 @@ impl FeatureWorld for World<'_> {
         }
         let old = self.region.block(position)?;
         self.region.set_block_worldgen(position, state)?;
+        self.record(|| DecorationOp::SetBlock(position, state, flags));
         // ProtoChunk keeps a block entity that already exists when the same kind
         // of block is set again (a chest turning waterlogged); other changes drop it.
         let registry = self.decoration.bindings.registry();
@@ -694,8 +740,10 @@ impl PlacementContext for World<'_> {
         let mut nbt = crate::nbt::Compound::new();
         nbt.insert("id".into(), Tag::String(name.as_str().into()));
         nbt.insert("LootTable".into(), Tag::String(table.into()));
-        nbt.insert("LootTableSeed".into(), Tag::Long(random.next_long()));
-        self.set_block_entity(position, nbt)
+        let seed = random.next_long();
+        nbt.insert("LootTableSeed".into(), Tag::Long(seed));
+        self.record(|| DecorationOp::LootTable(position, table.to_owned(), seed));
+        self.store_block_entity(position, nbt)
     }
     /// BeehiveDecorator: `getBlockEntity(pos, BEEHIVE)` then
     /// `storeBee(Occupant.create(ticks))` for each bee (min ticks in hive 600).
@@ -752,7 +800,8 @@ impl PlacementContext for World<'_> {
         nbt.insert("id".into(), Tag::String("minecraft:mob_spawner".into()));
         nbt.insert("SpawnData".into(), Tag::Compound(data));
         nbt.insert("SpawnPotentials".into(), Tag::List(Vec::new()));
-        self.set_block_entity(position, nbt)
+        self.record(|| DecorationOp::Spawner(position, entity.to_owned()));
+        self.store_block_entity(position, nbt)
     }
     fn attachment_at(
         &mut self,
@@ -851,6 +900,7 @@ impl PlacementContext for World<'_> {
             }))
     }
     fn add_entity(&mut self, nbt: crate::nbt::Compound) -> Result<(), PlacementQueryError> {
+        self.record(|| DecorationOp::Entity(nbt.clone()));
         self.entities.push(nbt);
         Ok(())
     }
@@ -859,9 +909,8 @@ impl PlacementContext for World<'_> {
         position: [i32; 3],
         nbt: crate::nbt::Compound,
     ) -> Result<(), PlacementQueryError> {
-        self.block_entities.retain(|(p, _)| *p != position);
-        self.block_entities.push((position, nbt));
-        Ok(())
+        self.record(|| DecorationOp::BlockEntity(position, nbt.clone()));
+        self.store_block_entity(position, nbt)
     }
     /// WorldGenRegion.getBlockEntity creates the gateway's block entity when the
     /// block is an End gateway; TheEndGatewayBlockEntity.setExitPosition.
@@ -983,6 +1032,7 @@ impl PlacementContext for World<'_> {
         self.region
             .set_block_worldgen(position, state)
             .map_err(|e| query(format!("{e:?}")))?;
+        self.record(|| DecorationOp::SetChunkBlock(position, state));
         Ok(())
     }
     /// BulkSectionAccess write: section storage only, no heightmap updates.
@@ -995,6 +1045,7 @@ impl PlacementContext for World<'_> {
             .chunk_mut(x >> 4, z >> 4)?
             .set_block_raw(x, y, z, state)
             .map_err(|e| query(format!("{e:?}")))?;
+        self.record(|| DecorationOp::SetSectionBlock([x, y, z], state));
         Ok(())
     }
     /// Generation regions contain no entities.
@@ -1074,10 +1125,14 @@ impl PlacementContext for World<'_> {
         fluid: FluidKind,
         delay: i32,
     ) -> Result<(), PlacementQueryError> {
-        self.region.schedule_fluid_tick(position, fluid, delay)
+        self.region.schedule_fluid_tick(position, fluid, delay)?;
+        self.record(|| DecorationOp::FluidTick(position, fluid, delay));
+        Ok(())
     }
     fn mark_postprocessing(&mut self, position: [i32; 3]) -> Result<(), PlacementQueryError> {
-        self.region.mark_postprocessing(position)
+        self.region.mark_postprocessing(position)?;
+        self.record(|| DecorationOp::PostProcess(position));
+        Ok(())
     }
     fn water_at(&mut self, position: [i32; 3]) -> Result<bool, PlacementQueryError> {
         self.region.water_at(position)
@@ -1088,7 +1143,9 @@ impl PlacementContext for World<'_> {
         block: BlockStateId,
         delay: i32,
     ) -> Result<(), PlacementQueryError> {
-        self.region.schedule_block_tick(position, block, delay)
+        self.region.schedule_block_tick(position, block, delay)?;
+        self.record(|| DecorationOp::BlockTick(position, block, delay));
+        Ok(())
     }
     fn biome_identity(&mut self, position: [i32; 3]) -> Result<BiomeId, PlacementQueryError> {
         self.region
@@ -1130,6 +1187,42 @@ impl PlacementContext for World<'_> {
         self.region.min_y()
     }
     fn height(&mut self, kind: HeightmapType, x: i32, z: i32) -> Result<i32, PlacementQueryError> {
+        if self.log.is_some() && self.region.chunk(x >> 4, z >> 4)?.heightmap(kind).is_none() {
+            self.record(|| DecorationOp::PrimeHeightmap([x, z], kind));
+        }
         self.region.height(kind, x, z)
+    }
+    /// OreFeature's search for a column under its blob, without a trait call
+    /// per column. Defers to `height` when a heightmap still has to be primed.
+    fn any_height_at_least(
+        &mut self,
+        kind: HeightmapType,
+        [x0, z0]: [i32; 2],
+        size: i32,
+        y: i32,
+    ) -> Result<Option<bool>, PlacementQueryError> {
+        let (x1, z1) = (x0.wrapping_add(size), z0.wrapping_add(size));
+        if size < 0 || x1 < x0 || z1 < z0 {
+            return Ok(None);
+        }
+        for cx in x0 >> 4..=x1 >> 4 {
+            for cz in z0 >> 4..=z1 >> 4 {
+                if !self.region.chunk(cx, cz).is_ok_and(|c| c.heightmap(kind).is_some()) {
+                    return Ok(None);
+                }
+            }
+        }
+        for x in x0..=x1 {
+            for z in z0..=z1 {
+                let map = self.region.chunk(x >> 4, z >> 4)?.heightmap(kind).unwrap();
+                let floor = map
+                    .first_available(x & 15, z & 15)
+                    .map_err(|e| RegionError::from(super::terrain::TerrainError::from(e)))?;
+                if y <= floor {
+                    return Ok(Some(true));
+                }
+            }
+        }
+        Ok(Some(false))
     }
 }

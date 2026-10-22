@@ -21,6 +21,7 @@ import net.minecraft.world.level.StructureManager;
 import net.minecraft.world.level.biome.MultiNoiseBiomeSource;
 import net.minecraft.world.level.biome.MultiNoiseBiomeSourceParameterLists;
 import net.minecraft.world.level.biome.TheEndBiomeSource;
+import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator;
 import net.minecraft.world.level.levelgen.NoiseGeneratorSettings;
 import net.minecraft.world.level.levelgen.blending.Blender;
@@ -34,7 +35,8 @@ import org.slf4j.Logger;
  *
  * <p>Settings are system properties: {@code horizon.accel.library}, the {@code libhorizon_accel} file;
  * {@code horizon.accel.resources}, the resources {@code horizon-prepare} made from the same game version;
- * {@code horizon.accel.terrain=false} turns the terrain swap off.
+ * {@code horizon.accel.terrain=false} turns the terrain swap off, and with it the features swap;
+ * {@code horizon.accel.features=false} turns only the features swap off.
  */
 public final class AccelMod implements ModInitializer {
     static final Logger LOG = LogUtils.getLogger();
@@ -43,6 +45,11 @@ public final class AccelMod implements ModInitializer {
             "net/minecraft/world/level/levelgen/NoiseBasedChunkGenerator", Set.of("buildTerrain",
                     "lambda$buildTerrain$0", "createNoiseChunk", "doFill", "buildSurface", "generateCarvers",
                     "applyCarvingMask", "getBiomeGenerationSettingsForCarver"));
+    /** applyBiomeDecoration and its lambdas (structure pieces, each feature). */
+    static final Swaps.Swap FEATURES = new Swaps.Swap("features",
+            "net/minecraft/world/level/chunk/ChunkGenerator", Set.of("applyBiomeDecoration",
+                    "lambda$applyBiomeDecoration$0", "lambda$applyBiomeDecoration$1", "lambda$applyBiomeDecoration$2",
+                    "lambda$applyBiomeDecoration$3", "lambda$applyBiomeDecoration$4", "lambda$applyBiomeDecoration$5"));
     /**
      * Mixins on those methods that change how the work runs but never its result: C2ME pools the surface rule's
      * buffers and picks the executor terrain runs on.
@@ -58,6 +65,7 @@ public final class AccelMod implements ModInitializer {
     private static final Map<ResourceKey<Level>, TerrainSwap> SWAPS = new HashMap<>();
     private static final Set<ResourceKey<Level>> DECIDED = new HashSet<>();
     private static volatile Swaps.Decision terrain;
+    private static volatile Swaps.Decision features;
 
     @Override
     public void onInitialize() {
@@ -95,6 +103,35 @@ public final class AccelMod implements ModInitializer {
             }
             return SWAPS.get(dimension);
         }
+    }
+
+    /**
+     * Horizon's decoration for this chunk's dimension, or null to run vanilla's: only where Horizon also generates
+     * the terrain, and no other mod patches {@code applyBiomeDecoration}. Called on worldgen threads.
+     */
+    public static FeatureSwap featuresFor(ChunkGenerator generator, WorldGenRegion region, StructureManager structures) {
+        if (library == null || !(generator instanceof NoiseBasedChunkGenerator noise)) {
+            return null;
+        }
+        TerrainSwap swap = terrainFor(noise, noise.generatorSettings(), Blender.empty(), region, structures);
+        if (swap == null) {
+            return null;
+        }
+        if (features == null) {
+            synchronized (SWAPS) {
+                if (features == null) {
+                    var decision = Swaps.decide(FEATURES, MixinTargets.of(FEATURES.targetClass()), "dev.horizonlab.accel.",
+                            Set.of(), Map.of());
+                    if (!Boolean.parseBoolean(System.getProperty("horizon.accel.features", "true"))) {
+                        decision = new Swaps.Decision(FEATURES, List.of("horizon.accel.features=false"));
+                    }
+                    LOG.info("horizon-accel: {}", decision.on() ? "Horizon decorates where it generates terrain"
+                            : "vanilla decorates: " + String.join("; ", decision.reasons()));
+                    features = decision;
+                }
+            }
+        }
+        return features.on() ? swap.features() : null;
     }
 
     private static TerrainSwap decide(NoiseBasedChunkGenerator generator, Holder<NoiseGeneratorSettings> settings,

@@ -271,6 +271,66 @@ public final class VanillaTerrainBench {
         System.out.println("parity " + (checked - differ) + "/" + checked + " chunks identical");
     }
 
+    /**
+     * Every chunk FEATURES wrote to (the square and its ring), decorated by vanilla in {@code a} and by the swap in
+     * {@code b}: blocks, block entities, scheduled ticks, post-processing marks and heightmaps.
+     */
+    static void featureParity(Map<Long, ProtoChunk> a, Map<Long, ProtoChunk> b, int x0, int z0, int x1, int z1,
+            LevelHeightAccessor height, RegistryAccess access) {
+        int checked = 0, differ = 0;
+        for (int z = z0 - 1; z <= z1 + 1; z++) for (int x = x0 - 1; x <= x1 + 1; x++) {
+            ProtoChunk vanilla = a.get(ChunkPos.pack(x, z)), ours = b.get(ChunkPos.pack(x, z));
+            checked++;
+            List<String> problems = new ArrayList<>();
+            var pos = new BlockPos.MutableBlockPos();
+            int blocks = 0;
+            for (int y = height.getMinY(); y < height.getMaxY() + 1; y++) for (int dz = 0; dz < 16; dz++) for (int dx = 0; dx < 16; dx++) {
+                pos.set((x << 4) + dx, y, (z << 4) + dz);
+                var va = vanilla.getBlockState(pos);
+                var vb = ours.getBlockState(pos);
+                if (va != vb && blocks++ == 0) problems.add(pos.toShortString() + " vanilla " + va + " horizon " + vb);
+            }
+            if (blocks > 1) problems.add(blocks + " blocks");
+            if (!vanilla.getBlockEntityNbts().equals(ours.getBlockEntityNbts())) {
+                problems.add("block entity nbt: vanilla " + vanilla.getBlockEntityNbts() + " horizon " + ours.getBlockEntityNbts());
+            }
+            var entitiesA = new java.util.TreeMap<String, String>();
+            var entitiesB = new java.util.TreeMap<String, String>();
+            vanilla.getBlockEntities().forEach((p, e) -> entitiesA.put(p.toShortString(), e.saveWithFullMetadata(access).toString()));
+            ours.getBlockEntities().forEach((p, e) -> entitiesB.put(p.toShortString(), e.saveWithFullMetadata(access).toString()));
+            if (!entitiesA.equals(entitiesB)) problems.add("block entities: vanilla " + entitiesA + " horizon " + entitiesB);
+            // Entities draw UUIDs and attribute bonuses from an unseeded random, so only kinds and places can match.
+            java.util.function.Function<ProtoChunk, String> entities = c -> c.getEntities().stream()
+                    .map(t -> t.getStringOr("id", "?") + t.get("Pos")).toList().toString();
+            if (!entities.apply(vanilla).equals(entities.apply(ours))) problems.add("entities: vanilla " + entities.apply(vanilla) + " horizon " + entities.apply(ours));
+            var ticksA = ((net.minecraft.world.ticks.ProtoChunkTicks<?>) vanilla.getBlockTicks()).scheduledTicks();
+            var ticksB = ((net.minecraft.world.ticks.ProtoChunkTicks<?>) ours.getBlockTicks()).scheduledTicks();
+            if (!ticksA.equals(ticksB)) problems.add("block ticks: vanilla " + ticksA.size() + " horizon " + ticksB.size());
+            var fluidsA = ((net.minecraft.world.ticks.ProtoChunkTicks<?>) vanilla.getFluidTicks()).scheduledTicks();
+            var fluidsB = ((net.minecraft.world.ticks.ProtoChunkTicks<?>) ours.getFluidTicks()).scheduledTicks();
+            if (!fluidsA.equals(fluidsB)) problems.add("fluid ticks: vanilla " + fluidsA.size() + " horizon " + fluidsB.size());
+            for (int s = 0; s < vanilla.getPostProcessing().length; s++) {
+                var pa = vanilla.getPostProcessing()[s];
+                var pb = ours.getPostProcessing()[s];
+                if (!java.util.Objects.equals(pa == null || pa.isEmpty() ? null : pa, pb == null || pb.isEmpty() ? null : pb)) {
+                    problems.add("post-processing of section " + s + ": vanilla " + pa + " horizon " + pb);
+                }
+            }
+            for (var type : Heightmap.Types.values()) {
+                boolean ha = vanilla.hasPrimedHeightmap(type), hb = ours.hasPrimedHeightmap(type);
+                if (ha != hb || ha && !Arrays.equals(vanilla.getOrCreateHeightmapUnprimed(type).getRawData(), ours.getOrCreateHeightmapUnprimed(type).getRawData())) {
+                    problems.add("heightmap " + type);
+                }
+            }
+            if (!problems.isEmpty()) {
+                differ++;
+                String text = String.join("; ", problems);
+                System.out.println("fparity chunk " + x + " " + z + ": " + (text.length() > 600 ? text.substring(0, 600) + "..." : text));
+            }
+        }
+        System.out.println("fparity " + (checked - differ) + "/" + checked + " chunks identical");
+    }
+
     public static void main(String[] args) throws Exception {
         long seed = Long.parseLong(args[0]);
         String dimension = args[1];
@@ -365,6 +425,8 @@ public final class VanillaTerrainBench {
         // "swap" times it in place of vanilla's TERRAIN status; "parity" compares it with vanilla's chunks.
         String mode = System.getenv().getOrDefault("HORIZON_ACCEL_MODE", "swap");
         boolean features = System.getenv("HORIZON_BENCH_FEATURES") != null;
+        int[] origin = System.getenv("HORIZON_BENCH_ORIGIN") == null ? null
+                : Arrays.stream(System.getenv("HORIZON_BENCH_ORIGIN").split(",")).mapToInt(Integer::parseInt).toArray();
         TerrainSwap opened = null;
         if (System.getenv("HORIZON_ACCEL_LIB") != null) {
             long start = System.nanoTime();
@@ -375,16 +437,31 @@ public final class VanillaTerrainBench {
             System.out.printf("horizon-accel %s, opened in %.1f ms%n", mode, (System.nanoTime() - start) / 1e6);
         }
         TerrainSwap swap = opened;
+        // Decoration starts with the first round, so terrain keeps Horizon's copies from the start.
+        if (swap != null) swap.features();
         ExecutorService pool = Executors.newFixedThreadPool(threads, r -> {
             Thread thread = new Thread(r, "worldgen");
             thread.setDaemon(true);
             return thread;
         });
         double[][] results = new double[rounds][];
+        // HORIZON_ACCEL_MODE=fparity: rounds in pairs over the same square, vanilla's terrain and decoration, then
+        // the swaps' (terrain swap parity is checked separately), compared.
+        boolean fparity = mode.equals("fparity");
+        Map<Long, ProtoChunk> vanillaRun = new HashMap<>();
+        long fallbacks = 0;
         for (int round = 0; round < warmup + rounds; round++) {
             chunks.clear();
             // A fresh square each round, far from the last, so nothing is reused.
-            int x0 = round * (size + 32), z0 = 0, x1 = x0 + size - 1, z1 = size - 1;
+            // HORIZON_BENCH_ORIGIN=X,Z: the measured rounds start at that chunk; warmup stays far away.
+            int place = fparity ? round / 2 : round;
+            int x0 = place * (size + 32), z0 = 0;
+            if (origin != null) {
+                x0 = round < warmup ? -10000 - x0 : origin[0] + ((fparity ? place - warmup / 2 : round - warmup)) * (size + 32);
+                z0 = round < warmup ? 0 : origin[1];
+            }
+            boolean swapFeatures = swap != null && (fparity ? round % 2 == 1 : mode.equals("swap"));
+            int x1 = x0 + size - 1, z1 = z0 + size - 1;
             int m = features ? 1 : 0;
             long starts = timed(pool, threads, x0 - 8 - m, z0 - 8 - m, x1 + 8 + m, z1 + 8 + m, (x, z) -> {
                 var chunk = chunkAt.apply(x, z);
@@ -407,7 +484,7 @@ public final class VanillaTerrainBench {
             });
             long terrain = timed(pool, threads, x0 - m, z0 - m, x1 + m, z1 + m, (x, z) -> {
                 var chunk = chunkAt.apply(x, z);
-                if (swap != null && mode.equals("swap")) {
+                if (swap != null && (mode.equals("swap") || swapFeatures)) {
                     swap.fill(chunk);
                     chunk.setPersistedStatus(ChunkStatus.TERRAIN);
                     return;
@@ -429,11 +506,22 @@ public final class VanillaTerrainBench {
                     for (int x = x0; x <= x1; x++) {
                         var chunk = chunkAt.apply(x, z);
                         var region = regionFor.apply(ChunkStatus.FEATURES, chunk);
+                        if (swapFeatures && swap.features().decorate(region, chunk)) {
+                            chunk.setPersistedStatus(ChunkStatus.FEATURES);
+                            continue;
+                        }
+                        if (swapFeatures) fallbacks++;
                         generator.applyBiomeDecoration(region, chunk, BenchLevel.structures.forWorldGenRegion(region));
                         chunk.setPersistedStatus(ChunkStatus.FEATURES);
                     }
                 }
                 decorate = System.nanoTime() - start;
+                if (fparity && round % 2 == 0) {
+                    vanillaRun = new HashMap<>(chunks);
+                } else if (fparity) {
+                    featureParity(vanillaRun, chunks, x0, z0, x1, z1, height, access);
+                }
+                if (swapFeatures) System.out.println("features: " + fallbacks + " chunks fell back to vanilla so far; " + swap.features().summary());
             }
             // Each status over the chunks it ran on: in a running server every chunk passes each status once.
             double n = size * size, ns = (size + 16 + 2 * m) * (size + 16 + 2 * m), nb = (size + 2 + 2 * m) * (size + 2 + 2 * m);

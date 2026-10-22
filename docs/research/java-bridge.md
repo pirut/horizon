@@ -154,6 +154,27 @@ biomes 3 %. Features are now the largest part.
 3×3 region into Rust (about 1 ms) and replay Rust's writes through Java's `setBlock` so block entities, ticks
 and post-processing stay exact.
 
+**The features swap** (`FeatureSwap`, a mixin on `ChunkGenerator.applyBiomeDecoration`, on by default; turn
+it off with `-Dhorizon.accel.features=false`). Java sends the 3×3 region to Rust, Rust decorates it and
+returns a log of operations as 7-int records (set a block in the region or straight into a section, schedule
+a block or fluid tick, mark post-processing, set a spawner's entity or a container's loot table, load a block
+entity or add an entity from NBT, read a heightmap so vanilla's lazy priming happens at the same point), and
+Java replays them through vanilla's own calls. Anything Rust can't express falls back to vanilla's
+decoration for that chunk. To skip most of the copy, Rust keeps the chunks it generated in terrain (keyed by a
+token Java holds in a weak map, dropped after the 9 decorations that read a chunk or by LRU at 2,048), so a
+region usually costs only 9 tokens.
+
+Parity: `HORIZON_ACCEL_MODE=fparity` compares blocks, block-entity NBT, entities (type and position; UUIDs
+are random), block and fluid ticks, post-processing marks and every heightmap against vanilla. Seven seeds
+(12345, 1, 42, 999, 7, 2024, -4172144997902289642), about 9,400 chunks: all identical, none fell back.
+
+Speed: in one thread the swap about ties vanilla (4.6 against 4.5 ms/chunk: Rust 3.2, the replay 0.95,
+the rest 0.25), because replaying through `WorldGenRegion.setBlock` costs nearly a third. In a server with
+C2ME it wins: pregen of 4,225 chunks at 89.2 and 89.9 chunks/s with features on against 86.1 and 84.9 off
+(+4 to 5 %), alternating. Engine speedups that came with it: a grid index for `TerrainRegion`, a heightmap
+fast path and a bitset in ore placement, and a `BiomeTemperature` cache that no longer pre-zeroes 38M
+instructions' worth of memory.
+
 ## What exists, and what it costs
 
 `crates/horizon-accel` puts Horizon's terrain generation behind a C ABI (a `cdylib`): open a dimension's
