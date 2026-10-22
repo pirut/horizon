@@ -415,6 +415,96 @@ fn unpack(archive: &Path, url: &str, to: &Path) -> Result<(), String> {
     }
 }
 
+/// The folder of the JDK the launcher installs itself when the player has none.
+fn own_jdk(major: i64) -> PathBuf {
+    data_dir().join("jdk").join(format!("temurin-{major}"))
+}
+
+/// A JDK folder's `JAVA_HOME`: a macOS bundle keeps it in `Contents/Home`.
+fn jdk_home(dir: &Path) -> PathBuf {
+    let bundle = dir.join("Contents/Home");
+    if bundle.is_dir() {
+        bundle
+    } else {
+        dir.to_path_buf()
+    }
+}
+
+/// Downloads Eclipse Temurin `major` from Adoptium into `own_jdk`, kept only if its SHA-256 is
+/// the one Adoptium publishes, and returns its `JAVA_HOME`.
+fn install_jdk(major: i64, log: &dyn Fn(String)) -> Result<PathBuf, String> {
+    let os = match sources::Os::current() {
+        sources::Os::Linux => "linux",
+        sources::Os::MacOs => "mac",
+        sources::Os::Windows => "windows",
+    };
+    let arch = if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "x64"
+    };
+    let assets: serde_json::Value = get(&format!(
+        "https://api.adoptium.net/v3/assets/latest/{major}/hotspot\
+         ?architecture={arch}&image_type=jdk&os={os}&vendor=eclipse"
+    ))?
+    .into_json()
+    .map_err(|e| e.to_string())?;
+    let package = &assets[0]["binary"]["package"];
+    let (Some(url), Some(sha256), Some(size)) = (
+        package["link"].as_str(),
+        package["checksum"].as_str(),
+        package["size"].as_u64(),
+    ) else {
+        return Err(format!(
+            "Adoptium has no Java {major} JDK for this computer"
+        ));
+    };
+    log(format!(
+        "Downloading Java {major} (Eclipse Temurin) from Adoptium"
+    ));
+    let target = own_jdk(major);
+    let partial = target.with_extension("partial");
+    let _ = fs::remove_dir_all(&partial);
+    fs::create_dir_all(&partial).map_err(|e| e.to_string())?;
+    let archive = partial.join("download");
+    download(url, size, sha256, &archive, &|_| {})?;
+    let unpacked = partial.join("unpacked");
+    unpack(&archive, url, &unpacked)?;
+    // The archives hold one top folder (jdk-25.0.5+8/...).
+    let entries: Vec<_> = fs::read_dir(&unpacked)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .collect();
+    let top = match entries.as_slice() {
+        [only] if only.path().is_dir() => only.path(),
+        _ => unpacked.clone(),
+    };
+    let _ = fs::remove_dir_all(&target);
+    fs::rename(&top, &target).map_err(|e| e.to_string())?;
+    let _ = fs::remove_dir_all(&partial);
+    Ok(jdk_home(&target))
+}
+
+/// Finds the JDK the version pins as horizon-prepare will. When there is none (a Mac's
+/// /usr/bin/javac is only a stub until a JDK is installed), uses the one the launcher installed,
+/// downloading it first if needed; `JAVA_HOME` then names it for this process and the
+/// preparers it starts.
+fn ensure_jdk(major: i64, log: &dyn Fn(String)) -> Result<(), String> {
+    let missing = match horizon_prepare::java::find(major) {
+        Ok(_) => return Ok(()),
+        Err(e) => e,
+    };
+    let own = jdk_home(&own_jdk(major));
+    let home = if own.join("bin").is_dir() {
+        own
+    } else {
+        install_jdk(major, log)
+            .map_err(|e| format!("{missing}\nHorizon couldn't install it either: {e}"))?
+    };
+    std::env::set_var("JAVA_HOME", &home);
+    horizon_prepare::java::find(major).map(|_| ())
+}
+
 /// Downloads one release, checks it against its signed checksums and unpacks it; `progress` gets
 /// the fraction done.
 pub fn install(release: &Release, progress: impl Fn(f32)) -> Result<(), String> {
@@ -863,12 +953,12 @@ pub fn preparer(
         .join(format!("{version}.json"));
     let binary = preparer_binary(&dir);
     let python = if binary.is_some() {
-        // The JDK the version pins, found as horizon-prepare finds it, so a missing one is
-        // reported before the server jar is downloaded.
+        // The JDK the version pins, found as horizon-prepare finds it (or installed), so a
+        // missing one is reported before the server jar is downloaded.
         let major = read_json(&dir.join("research-lock.json"))
             .and_then(|lock| lock["minecraft"]["java_major"].as_i64())
             .ok_or("The version's research-lock.json has no java_major")?;
-        horizon_prepare::java::find(major)?;
+        ensure_jdk(major, log)?;
         None
     } else {
         let python = python()
@@ -2063,6 +2153,21 @@ mod release_loading_tests;
 mod tests {
     use super::*;
     use std::cmp::Ordering::*;
+
+    #[test]
+    #[ignore = "downloads a JDK from Adoptium; run explicitly with --ignored"]
+    fn a_missing_jdk_is_installed_from_adoptium() {
+        let home =
+            std::env::temp_dir().join(format!("horizon-launcher-jdk-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        std::env::set_var("HORIZON_LAUNCHER_HOME", &home);
+        let java_home = install_jdk(25, &|_| {}).unwrap();
+        assert_eq!(java_home, jdk_home(&own_jdk(25)));
+        std::env::set_var("JAVA_HOME", &java_home);
+        let jdk = horizon_prepare::java::find(25).unwrap();
+        assert!(jdk.javac.starts_with(&home));
+        fs::remove_dir_all(&home).unwrap();
+    }
 
     #[test]
     fn the_game_plays_under_its_own_audio_stream_name() {
