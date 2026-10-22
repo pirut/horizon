@@ -243,6 +243,8 @@ pub struct Streaming {
     sequence: u64,
     pub center: (i32, i32),
     pub radius: i32,
+    /// An Earth world's generator, for its spawn.
+    pub earth: Option<Arc<crate::earthgen::EarthTerrain>>,
     /// `/forceload`ed chunks: kept loaded whatever the distance.
     pub forced: HashSet<(i32, i32)>,
     /// No work is scheduled while paused (title screen).
@@ -544,6 +546,7 @@ impl Streaming {
             sequence: 0,
             center: (0, 0),
             radius: 8,
+            earth: None,
             forced: HashSet::new(),
             paused: false,
             sky_light: true,

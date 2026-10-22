@@ -72,7 +72,24 @@ impl WorldRequest {
             level.hardcore = o.hardcore;
             level.difficulty = horizon_client::title::DIFFICULTIES[o.difficulty()].into();
             level.allow_commands = Some(o.commands(creative));
-            horizon_client::save::write_world_gen_settings(&save_root, level.seed, o.world_gen())?;
+            let mut generation = o.world_gen();
+            if o.earth {
+                let (latitude, longitude) = horizon_client::earthgen::Place::YOSEMITE;
+                generation.earth =
+                    Some(horizon_client::earthgen::Place::settle(latitude, longitude));
+            }
+            horizon_client::save::write_world_gen_settings(&save_root, level.seed, generation)?;
+        }
+        // `--earth LAT,LON`: a new world without the screen is an Earth world there.
+        if created
+            && create.is_none()
+            && let Some((latitude, longitude)) = options.earth
+        {
+            let generation = horizon_client::save::WorldGen {
+                earth: Some(horizon_client::earthgen::Place::settle(latitude, longitude)),
+                ..Default::default()
+            };
+            horizon_client::save::write_world_gen_settings(&save_root, level.seed, generation)?;
         }
         // Worlds made without the Create New World screen (--world, the
         // control socket) take its default: commands on for Creative only.
@@ -189,17 +206,34 @@ pub(super) fn make_streaming(
         dim.id(),
     )));
     let mut locator = None;
-    let flat = (dim == Dim::Overworld)
+    let gen_settings = (dim == Dim::Overworld)
         .then(|| horizon_client::save::world_gen_settings(world_root))
-        .flatten()
-        .and_then(|s| {
-            horizon_client::flatgen::FlatTerrain::from_settings(
-                &s,
-                pack.assets.registry,
-                res.biomes(),
-            )
-        });
-    let mut streaming = if let Some(inner) = flat {
+        .flatten();
+    let earth = gen_settings
+        .as_ref()
+        .and_then(horizon_client::earthgen::Place::from_settings);
+    let flat = gen_settings.filter(|_| earth.is_none()).and_then(|s| {
+        horizon_client::flatgen::FlatTerrain::from_settings(&s, pack.assets.registry, res.biomes())
+    });
+    let mut streaming = if let Some(place) = earth {
+        let inner = horizon_client::earthgen::EarthTerrain::new(
+            place,
+            pack.assets.registry,
+            res.biomes().clone(),
+        )?;
+        let mut streaming = Streaming::new(
+            Arc::new(Persistent {
+                inner: inner.clone(),
+                save: save.clone(),
+                registry: pack.assets.clone(),
+                biomes: res.biomes().clone(),
+            }),
+            pack.context.clone(),
+            res.threads(),
+        );
+        streaming.earth = Some(inner);
+        streaming
+    } else if let Some(inner) = flat {
         Streaming::new(
             Arc::new(Persistent {
                 inner: Arc::new(inner),

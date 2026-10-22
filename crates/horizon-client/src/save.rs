@@ -2031,6 +2031,8 @@ const INT_RULES: [&str; 11] = [
 pub struct WorldGen {
     /// The `minecraft:flat` preset (Superflat) instead of `normal`.
     pub flat: bool,
+    /// The real Earth (`horizon:earth`) instead of either.
+    pub earth: Option<crate::earthgen::Place>,
     pub structures: bool,
     pub bonus_chest: bool,
 }
@@ -2046,6 +2048,7 @@ impl WorldGen {
         Some(Self {
             flat: text(generator.and_then(|g| g.get("type")))
                 .is_some_and(|t| t.trim_start_matches("minecraft:") == "flat"),
+            earth: crate::earthgen::Place::from_settings(&settings),
             structures: flag("generate_structures", true),
             bonus_chest: flag("bonus_chest", false),
         })
@@ -2055,6 +2058,7 @@ impl Default for WorldGen {
     fn default() -> Self {
         Self {
             flat: false,
+            earth: None,
             structures: true,
             bonus_chest: false,
         }
@@ -2144,7 +2148,12 @@ pub fn write_world_gen_settings_with(
                 Tag::compound([
                     (
                         "minecraft:overworld",
-                        if options.flat {
+                        if let Some(place) = options.earth {
+                            Tag::compound([
+                                ("type", string("minecraft:overworld")),
+                                ("generator", place.generator()),
+                            ])
+                        } else if options.flat {
                             flat
                         } else {
                             dimension(
