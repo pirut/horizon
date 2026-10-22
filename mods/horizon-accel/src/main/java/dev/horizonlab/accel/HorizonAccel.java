@@ -19,7 +19,7 @@ import java.nio.file.Path;
  * garbage collector keeps running meanwhile.
  */
 public final class HorizonAccel {
-    public static final int ABI = 4;
+    public static final int ABI = 5;
 
     private static final ValueLayout.OfInt I32 = ValueLayout.JAVA_INT;
     private static final ValueLayout.OfLong I64 = ValueLayout.JAVA_LONG;
@@ -28,7 +28,8 @@ public final class HorizonAccel {
 
     final MethodHandle abi, noop, noopCritical, sum, error, open, close, stateCount, stateName,
             biomeCount, biomeName, mapStates, mapBiomes, generate, chunkBounds, chunkBlocks, chunkSection, chunkBiomes,
-            chunkPostprocessing, chunkFree, stageTimings, decorate, decorationSizes, decorationCopy, decorationFree, chunkKeep, forget, biomes;
+            chunkPostprocessing, chunkFree, stageTimings, decorate, decorationSizes, decorationCopy, decorationFree, chunkKeep, forget, biomes,
+            deflate, deflateBound, inflate;
 
     private HorizonAccel(SymbolLookup lookup) {
         abi = link(lookup, "horizon_accel_abi", FunctionDescriptor.of(I32), false);
@@ -61,6 +62,9 @@ public final class HorizonAccel {
         chunkKeep = link(lookup, "horizon_accel_chunk_keep", FunctionDescriptor.of(I32, PTR, PTR, I64, I32, PTR, SIZE), true);
         forget = link(lookup, "horizon_accel_forget", FunctionDescriptor.ofVoid(PTR, PTR, SIZE), true);
         biomes = link(lookup, "horizon_accel_biomes", FunctionDescriptor.of(I32, PTR, I32, I32, PTR, SIZE), false);
+        deflate = link(lookup, "horizon_accel_deflate", FunctionDescriptor.of(I64, PTR, SIZE, PTR, SIZE), false);
+        deflateBound = link(lookup, "horizon_accel_deflate_bound", FunctionDescriptor.of(SIZE, SIZE), true);
+        inflate = link(lookup, "horizon_accel_inflate", FunctionDescriptor.of(I64, PTR, SIZE, PTR, SIZE), false);
     }
 
     private static MethodHandle link(SymbolLookup lookup, String name, FunctionDescriptor descriptor, boolean critical) {
@@ -78,6 +82,29 @@ public final class HorizonAccel {
             throw new IllegalStateException("horizon-accel speaks ABI " + abi + ", this mod " + ABI);
         }
         return accel;
+    }
+
+    /**
+     * Compresses {@code src} into {@code dst} as one zlib stream at {@code Deflater}'s default level, through
+     * zlib-rs; the bytes written, or -1 when {@code dst} is smaller than {@link #deflateBound}. Both must be native
+     * memory: compressing a chunk takes a fraction of a millisecond, too long to hold the garbage collector off.
+     */
+    public long deflate(MemorySegment src, MemorySegment dst) {
+        return (long) call(() -> (long) deflate.invokeExact(src, src.byteSize(), dst, dst.byteSize()));
+    }
+
+    /** The output size {@link #deflate} always fits {@code length} bytes in (zlib's {@code compressBound}). */
+    public long deflateBound(long length) {
+        return (long) call(() -> (long) deflateBound.invokeExact(length));
+    }
+
+    /**
+     * Decompresses the zlib stream at the start of {@code src} into {@code dst} (bytes after the stream's end are
+     * ignored): the bytes written when the stream ended, -1 when {@code dst} filled first, -2 when {@code src} is not
+     * a whole zlib stream. Native memory only, as for {@link #deflate}.
+     */
+    public long inflate(MemorySegment src, MemorySegment dst) {
+        return (long) call(() -> (long) inflate.invokeExact(src, src.byteSize(), dst, dst.byteSize()));
     }
 
     /** One dimension's generator. Its methods are safe to call from many worldgen threads at once. */

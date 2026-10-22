@@ -1385,6 +1385,7 @@ dependencies = [
 name = "horizon-accel"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "horizon-core",
  "horizon-world",
 ]

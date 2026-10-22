@@ -10,6 +10,7 @@
 //! No panic crosses the boundary: each entry point catches it and reports
 //! it like any other error, through [`horizon_accel_error`].
 mod decorate;
+pub mod zlib;
 
 pub use decorate::{Decoration, RECORD};
 use horizon_core::position::ChunkPos;
@@ -29,7 +30,7 @@ use std::{
 };
 
 /// Bumped whenever a signature or a layout below changes.
-pub const ABI: u32 = 4;
+pub const ABI: u32 = 5;
 
 /// One dimension's generator, shared by every Java worldgen thread.
 pub struct Accel {
@@ -292,6 +293,78 @@ pub unsafe extern "C" fn horizon_accel_sum(data: *const i32, len: usize) -> i64 
     // SAFETY: the caller passes a valid buffer.
     let data = unsafe { std::slice::from_raw_parts(data, len) };
     data.iter().map(|&v| i64::from(v)).sum()
+}
+
+/// Compresses `len` bytes at `src` into `dst` as one zlib stream at vanilla's
+/// level (see [`zlib`]); the bytes written, or -1 when `cap` is too small
+/// (never at `horizon_accel_deflate_bound(len)`).
+///
+/// # Safety
+/// `src` must point to `len` readable bytes and `dst` to `cap` writable ones.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn horizon_accel_deflate(
+    src: *const u8,
+    len: usize,
+    dst: *mut u8,
+    cap: usize,
+) -> i64 {
+    guard(-1, || {
+        // SAFETY: forwarded from the caller.
+        let (input, output) = unsafe { (bytes(src, len), bytes_mut(dst, cap)) };
+        Ok(zlib::deflate(input, output).map_or(-1, |n| n as i64))
+    })
+}
+
+/// The `cap` [`horizon_accel_deflate`] always fits `len` bytes in.
+#[unsafe(no_mangle)]
+pub extern "C" fn horizon_accel_deflate_bound(len: usize) -> usize {
+    zlib::bound(len)
+}
+
+/// Decompresses the zlib stream at `src` into `dst`: the bytes written when
+/// the stream ended, -1 when `dst` filled first, -2 when it isn't a whole
+/// zlib stream.
+///
+/// # Safety
+/// `src` must point to `len` readable bytes and `dst` to `cap` writable ones.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn horizon_accel_inflate(
+    src: *const u8,
+    len: usize,
+    dst: *mut u8,
+    cap: usize,
+) -> i64 {
+    guard(-2, || {
+        // SAFETY: forwarded from the caller.
+        let (input, output) = unsafe { (bytes(src, len), bytes_mut(dst, cap)) };
+        Ok(match zlib::inflate(input, output) {
+            zlib::Inflated::Done(n) => n as i64,
+            zlib::Inflated::Full => -1,
+            zlib::Inflated::Bad => -2,
+        })
+    })
+}
+
+/// `len` bytes at `data`; empty for a null pointer.
+///
+/// # Safety
+/// A non-null `data` must point to `len` readable bytes.
+unsafe fn bytes<'a>(data: *const u8, len: usize) -> &'a [u8] {
+    if data.is_null() || len == 0 {
+        return &[];
+    }
+    // SAFETY: the caller passes a valid buffer.
+    unsafe { std::slice::from_raw_parts(data, len) }
+}
+
+/// # Safety
+/// A non-null `data` must point to `len` writable bytes.
+unsafe fn bytes_mut<'a>(data: *mut u8, len: usize) -> &'a mut [u8] {
+    if data.is_null() || len == 0 {
+        return &mut [];
+    }
+    // SAFETY: the caller passes a valid buffer.
+    unsafe { std::slice::from_raw_parts_mut(data, len) }
 }
 
 /// This thread's last error, copied as in [`copy_out`]; 0 if none.
