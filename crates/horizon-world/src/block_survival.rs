@@ -606,6 +606,9 @@ impl<'r> BlockSurvivalRegistry<'r> {
         {
             return Ok(true);
         }
+        if let Some(full) = self.collision.cached_face_full(neighbor, face) {
+            return Ok(full);
+        }
         let shape = self
             .collision
             .collision_shape(world, neighbor, at)
