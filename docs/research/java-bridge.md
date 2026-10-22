@@ -97,8 +97,11 @@ It reads names only (the constant pool, the class header and annotations), and d
    always; Lithium, C2ME, horizon-accel as asked), the same seed, and Chunky generating the same square of
    chunks through every status. `--jfr` records each run. `tools/accel_world_diff.py` compares two saved
    worlds block for block.
+3. **Server ticking**: `tools/accel_tick.py`. A fresh server per mod set, the same 8×8 chunks force-loaded and the
+   same 1,200 mobs summoned on them (farm animals, villagers, monsters kept by a fixed night), then `tick sprint`
+   runs 3,000 ticks as fast as it can and reports ms per tick.
 
-Both need the player's own copy of Minecraft 26.3, which Horizon never downloads (`horizon-prepare --prepare`).
+All of them need the player's own copy of Minecraft 26.3, which Horizon never downloads (`horizon-prepare --prepare`).
 
 ## Results
 
@@ -222,6 +225,13 @@ ScalableLux, 6 alternating pairs: 93.4, 91.9, 91.9, 98.5, 99.0 and 100.8 chunks/
 **The baseline now includes ScalableLux**, the Starlight successor and the fastest light engine for 26.3; it
 composes with horizon-accel. C2ME + ScalableLux: 77.1, 73.5 and 74.7 chunks/s; with horizon-accel added: 92.2, 96.9
 and 97.1 (+27 %, CPU per chunk 15 % lower), alternating.
+
+**Ticking, beyond world generation** (`accel_tick.py`, 1,200 mobs, 1,500 ticks, two alternating pairs): vanilla
+32.5 and 33.4 ms/tick, Lithium 21.3 and 22.2 (−34 %). With Lithium, the server thread's time (JFR) spreads over many
+small per-mob queries: block lookups through `ServerChunkCache.getChunk` 8 %, `checkInsideBlocks` 6 %, entity
+pushing 5 %, fluid checks 5 %, pathfinding 4.5 %, the rest mob AI. None is a self-contained bulk of work Rust could
+take in one crossing: each would need the world's blocks on the Rust side, kept in step with every change any mod
+makes. So ticking stays with Lithium, and the next swaps are bulk work on whole chunks and packets.
 
 ## What exists, and what it costs
 
