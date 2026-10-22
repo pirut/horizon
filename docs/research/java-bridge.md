@@ -100,6 +100,9 @@ It reads names only (the constant pool, the class header and annotations), and d
 3. **Server ticking**: `tools/accel_tick.py`. A fresh server per mod set, the same 8×8 chunks force-loaded and the
    same 1,200 mobs summoned on them (farm animals, villagers, monsters kept by a fixed night), then `tick sprint`
    runs 3,000 ticks as fast as it can and reports ms per tick.
+4. **Players**: `tools/accel_net.py`. A fresh server per mod set, with horizon-bots logging in and flying around. It
+   reports the chunks sent, the server's CPU time per chunk sent, and its tick time. `-zlib` turns only
+   horizon-accel's zlib off.
 
 All of them need the player's own copy of Minecraft 26.3, which Horizon never downloads (`horizon-prepare --prepare`).
 
@@ -232,6 +235,16 @@ small per-mob queries: block lookups through `ServerChunkCache.getChunk` 8 %, `c
 pushing 5 %, fluid checks 5 %, pathfinding 4.5 %, the rest mob AI. None is a self-contained bulk of work Rust could
 take in one crossing: each would need the world's blocks on the Rust side, kept in step with every change any mod
 makes. So ticking stays with Lithium, and the next swaps are bulk work on whole chunks and packets.
+
+**zlib for chunk saves, loads and packets** (`horizon.accel.zlib`). horizon-accel takes over vanilla's three zlib
+sites: `RegionFileVersion.VERSION_DEFLATE`, `CompressionEncoder.encode` and `CompressionDecoder.decode`. It runs
+them through zlib-rs, which is 2.6× faster than the JDK's zlib at deflate and 2.4× at inflate on real chunks. Its
+output is about 2 % larger but is still standard zlib. Every one of 7,569 chunks round-trips identically, and
+Python's zlib reads every chunk of a world horizon-accel saved. A packet whose declared size is wrong gets vanilla's
+exact error, and a stream Rust can't read falls back to the JDK's. In pregen with C2ME + ScalableLux + horizon-accel,
+zlib on gave 95.4, 100.4 and 104.4 chunks/s against 93.7, 94.7 and 95.6 with it off (+5.7 %, alternating), with
+CPU per chunk at 37.6 against 39.8 ms. With 20 bots for 90 s, CPU per chunk sent was 13.20 and 13.97 ms against
+14.12 and 14.55 (−4 to −6 %), and mspt was 53.7 and 41.0 against 62.0 and 58.1.
 
 ## What exists, and what it costs
 

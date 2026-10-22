@@ -36,9 +36,9 @@ import org.slf4j.Logger;
  *
  * <p>Settings are system properties: {@code horizon.accel.library}, the {@code libhorizon_accel} file;
  * {@code horizon.accel.resources}, the resources {@code horizon-prepare} made from the same game version;
- * {@code horizon.accel.terrain=false} turns the terrain swap off, and with it the features swap;
+ * {@code horizon.accel.terrain=false} turns the terrain swap off, and with it the features and zlib swaps;
  * {@code horizon.accel.features=false} turns only the features swap off, {@code horizon.accel.biomes=false} only the
- * biomes swap.
+ * biomes swap, and {@code horizon.accel.zlib=false} the zlib swap for chunk saves and packets ({@link FastZlib}).
  */
 public final class AccelMod implements ModInitializer {
     static final Logger LOG = LogUtils.getLogger();
@@ -96,6 +96,11 @@ public final class AccelMod implements ModInitializer {
         } catch (RuntimeException | UnsatisfiedLinkError e) {
             LOG.error("horizon-accel: off, the library didn't load", e);
         }
+    }
+
+    /** The loaded library, or null when horizon-accel is off. */
+    static HorizonAccel library() {
+        return library;
     }
 
     /** Horizon's terrain for this chunk's dimension, or null to run vanilla's. Called on worldgen threads. */
