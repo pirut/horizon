@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "horizon-accel",
+  "version": "0.1.0",
+  "name": "Horizon Accel",
+  "description": "Generates vanilla's terrain with Horizon's Rust engine, block for block the same, wherever no other mod changes it.",
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "dev.horizonlab.accel.mc.AccelMod"
+    ]
+  },
+  "mixins": [
+    "horizon-accel.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "26.3",
+    "java": ">=25"
+  }
+}

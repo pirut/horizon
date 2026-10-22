@@ -30,7 +30,8 @@ class AccelJavaTests(unittest.TestCase):
     def test_compiles_and_passes(self):
         javac, java = jdk()
         with tempfile.TemporaryDirectory() as out:
-            sources = sorted(str(p) for p in SOURCES.rglob("*.java"))
+            # src/mc and src/bench build against the game jar (tools/build_accel_mod.py, tools/accel_bench.py).
+            sources = sorted(str(p) for d in ("main", "test") for p in (SOURCES / d).rglob("*.java"))
             subprocess.run([javac, "--release", "25", "-Xlint:all,-restricted", "-Werror", "-d", out, *sources],
                            check=True)
             result = subprocess.run([java, "-ea", "-cp", out, "dev.horizonlab.accel.AccelTest"],

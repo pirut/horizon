@@ -86,15 +86,61 @@ It reads names only (the constant pool, the class header and annotations), and d
 
 ## Benchmarks, before and after every step
 
-1. **Subsystem, Rust against Java.** The same work through both: for terrain, the same seed and 256 chunks
-   through vanilla's `fillFromNoise` in a running server (with and without C2ME) and through Horizon's
-   `chunkgen_bench`. This is the go or no-go for each candidate.
-2. **Whole game, modded.** `tools/server_bench.py` and `tools/perf_bench.py` already run Fabric with mods
-   side by side with Horizon. They get a `fabric+accel` server: the same pack with and without `horizon-accel`,
-   for MSPT, P99, chunk generation rate (Chunky pregeneration), memory and start time.
+1. **Subsystem, Rust against Java**: `tools/accel_bench.py`. `VanillaTerrainBench`
+   (`mods/horizon-accel/src/bench`) runs vanilla 26.3's own statuses in-process on the pinned server jar, with
+   real `WorldGenRegion`s (the scaffolding of `VanillaChunkGenerationOracle`); `terrain_bench`
+   (`crates/horizon-accel/examples`) runs Horizon's through `Accel`, the code the swap calls. Both bring fresh
+   16×16 squares of chunks to the carvers status after warmup rounds, and the script alternates them. With
+   `HORIZON_ACCEL_MODE=parity` the Java bench also fills every chunk again through the swap and compares it
+   with vanilla's, block for block, with post-processing marks and world-generation heightmaps.
+2. **Whole server**: `tools/accel_pregen.py`. A fresh Fabric 26.3 server per mod set (Fabric API and Chunky
+   always; Lithium, C2ME, horizon-accel as asked), the same seed, and Chunky generating the same square of
+   chunks through every status. `--jfr` records each run. `tools/accel_world_diff.py` compares two saved
+   worlds block for block.
 
-Both need the player's own copy of Minecraft 26.3, which Horizon never downloads, so they run on a machine
-that has it.
+Both need the player's own copy of Minecraft 26.3, which Horizon never downloads (`horizon-prepare --prepare`).
+
+## Results
+
+Measured on 2026-10-22 on a 4-vCPU cloud VM (2.8 GHz Xeon, Temurin 25.0.4, seed 12345). Run-to-run noise is
+about ±8 %, so every comparison alternates its sides and repeats.
+
+**Terrain alone** (noise, surface, carvers; `accel_bench.py`, two pairs of 5 rounds × 256 chunks):
+
+| | vanilla Java | Horizon Rust | |
+|---|---:|---:|---:|
+| 1 thread | 20.1 ms/chunk | 13.8 ms/chunk | 1.45× |
+| 4 threads | 7.2 ms/chunk | 3.6 ms/chunk | 2.0× |
+| up to carvers, incl. structure starts and biomes, 4 threads | 7.7 | 4.4 | 1.76× |
+
+Through the swap, inside vanilla's pipeline (Rust, the copy out, and writing the chunk), terrain takes 16.0
+ms/chunk on 1 thread and 4.9 on 4: writing a chunk costs about 0.45 ms. The parity mode found 768 chunks on
+each of three seeds (12345, -1, 987654321987) identical to vanilla's.
+
+**Whole server** (`accel_pregen.py`, 4,225 chunks, Chunky, chunks per second, mean of the repeats):
+
+| mods | chunks/s | vs vanilla |
+|---|---:|---:|
+| vanilla (Fabric API, Chunky) | 52.3 | |
+| Lithium | 56.3 | +8 % |
+| horizon-accel | 55.9 | +7 % |
+| C2ME | 70.3 (3 later runs: 68.8) | +34 % |
+| C2ME + horizon-accel | 72.5 | +39 % |
+
+C2ME + horizon-accel beat C2ME alone in each of three alternating pairs (74.3/70.8/72.3 against
+70.3/68.8/67.4). JFR on vanilla shows where a chunk's time goes: terrain about half (noise 29 %, surface
+21 %, carvers 3 %), features 22 %, light 5 %, saving 5 %, biomes 2 %. Inside a server Horizon's terrain takes
+18 to 20 ms per chunk per thread (noise 9.3, surface 5.5, structures 1.8, biomes 1.1, carvers 1.0; the mod
+logs this every 4,096 chunks), against 14 ms in isolation, because it shares the cores with the server's
+other work; with C2ME's larger worker pool, 31 ms.
+
+Saved worlds can't show parity directly: vanilla's own features (ore blobs, seagrass) land differently from
+run to run, so two vanilla worlds share only 454 of 1,089 chunks exactly, and vanilla against horizon-accel
+424. The block-for-block check is the in-process parity mode above.
+
+What would help next, by size: faster noise and surface in Horizon itself (Perlin sampling is over half of
+Horizon's terrain time, bound by table lookups rather than arithmetic: neither a branch-free `floor` nor an
+AVX2 build gained 2 %), then the features status.
 
 ## What exists, and what it costs
 
@@ -105,8 +151,23 @@ marks. Sections come out packed as vanilla's `PalettedContainer` stores them (a 
 `SimpleBitStorage` words), so the Java side can hand them to the chunk as they are instead of setting 98,304
 blocks one at a time. No panic crosses the boundary. `mods/horizon-accel` holds the Java side, which so far needs nothing
 from Minecraft: `HorizonAccel` (the FFM binding), `IdMap` (Horizon names to the game's ids) and `Swaps` (a
-swap is off when another mod's mixin is applied to its class, or when its inputs aren't supported). Its tests
-run with `python3 -m unittest tests.test_accel_java` when a Java 25 JDK is installed.
+swap is off when another mod's mixin changes a method it replaces, unless that mixin is known to change only
+how the work runs, or when its inputs aren't supported). Its tests run with
+`python3 -m unittest tests.test_accel_java` when a Java 25 JDK is installed.
+
+`mods/horizon-accel/src/mc` is the Minecraft-facing part, built with `tools/build_accel_mod.py` into
+`dist/horizon-accel-<version>.jar`:
+
+- `NoiseBasedChunkGeneratorMixin` replaces `buildTerrain` at its head when `AccelMod` allows it, and runs the
+  swap on the same background executor vanilla uses.
+- `AccelMod` loads the library (`-Dhorizon.accel.library`, `-Dhorizon.accel.resources`) and decides once per
+  dimension: vanilla's generator settings and biome source for that dimension, no blending with old chunks,
+  no other mod's mixin on the replaced methods (`MixinTargets` reads each applied mixin's injector targets
+  from its class file; C2ME's buffer pooling and executor choice are listed as same-results), and vanilla's
+  world-generation data (`WorldgenFingerprint`: a hash of every registry entry the terrain reads, as the game's
+  codecs encode it, keys sorted). A data pack such as Terralith changes the hash and keeps vanilla's code.
+- `TerrainSwap` writes each section with `PalettedContainer.unpack`, the way chunk loading builds one, adds
+  the post-processing marks, and primes the two world-generation heightmaps from the final blocks.
 
 The cost of crossing, from `CrossingBench` (`mods/horizon-accel/src/test`) on a 4-thread 2.8 GHz Xeon cloud
 VM, OpenJDK 25.0.2, release build, median of seven rounds:
@@ -128,12 +189,8 @@ So the crossing is not what decides this. Whether Rust's terrain generation beat
 1. Scanner and this plan.
 2. **Done:** the native library, the FFM binding, the id mapping and the conflict rule, with the crossing
    measured.
-3. Measure terrain generation in Rust against Java (benchmark 1). This needs Minecraft 26.3: the cloud
-   machine this was built on can't reach Mojang's servers. Stop here if Rust isn't clearly faster.
-4. The Minecraft-facing part of the mod, which needs the game jar to compile: a mixin on
-   `NoiseBasedChunkGenerator` that, for vanilla noise settings, asks the library for the chunk and writes its
-   blocks, biomes, heightmaps and post-processing marks into the `ProtoChunk`; registry mapping through
-   `BlockStateParser` and the biome registry; and `Swaps` fed from Mixin's `ClassInfo`.
-5. A parity harness comparing a world generated with the mod with one generated without it, chunk for chunk,
-   plus the whole-game benchmark.
-6. The next subsystem from the table, by measured gap.
+3. **Done:** terrain in Rust against Java: 1.45× to 2× faster (Results).
+4. **Done:** the Minecraft-facing mod: mixin, per-dimension decision, data fingerprint, per-method conflicts.
+5. **Done:** the parity harness (in-process, block for block) and the whole-server benchmark.
+6. Make Horizon's noise and surface faster, which helps both Horizon and this mod; then swap biomes too (the
+   Rust call already computes them, so Java's BIOMES status is duplicated work), then features.

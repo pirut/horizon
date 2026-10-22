@@ -19,7 +19,7 @@ import java.nio.file.Path;
  * garbage collector keeps running meanwhile.
  */
 public final class HorizonAccel {
-    public static final int ABI = 1;
+    public static final int ABI = 2;
 
     private static final ValueLayout.OfInt I32 = ValueLayout.JAVA_INT;
     private static final ValueLayout.OfLong I64 = ValueLayout.JAVA_LONG;
@@ -28,7 +28,7 @@ public final class HorizonAccel {
 
     final MethodHandle abi, noop, noopCritical, sum, error, open, close, stateCount, stateName,
             biomeCount, biomeName, mapStates, mapBiomes, generate, chunkBounds, chunkBlocks, chunkSection, chunkBiomes,
-            chunkPostprocessing, chunkFree;
+            chunkPostprocessing, chunkFree, stageTimings;
 
     private HorizonAccel(SymbolLookup lookup) {
         abi = link(lookup, "horizon_accel_abi", FunctionDescriptor.of(I32), false);
@@ -53,6 +53,7 @@ public final class HorizonAccel {
         chunkPostprocessing = link(lookup, "horizon_accel_chunk_postprocessing",
                 FunctionDescriptor.of(SIZE, PTR, I32, PTR, SIZE), true);
         chunkFree = link(lookup, "horizon_accel_chunk_free", FunctionDescriptor.ofVoid(PTR), false);
+        stageTimings = link(lookup, "horizon_accel_stage_timings", FunctionDescriptor.of(I32, PTR, PTR, SIZE), true);
     }
 
     private static MethodHandle link(SymbolLookup lookup, String name, FunctionDescriptor descriptor, boolean critical) {
@@ -159,6 +160,16 @@ public final class HorizonAccel {
                     return null;
                 });
             }
+        }
+
+        /**
+         * {@code [chunks, biomes, noise, surface, structures, carvers]} so far: Horizon's own time in each stage, in
+         * nanoseconds summed over threads.
+         */
+        public long[] stageNanos() {
+            long[] out = new long[6];
+            check((int) call(() -> (int) stageTimings.invokeExact(handle, MemorySegment.ofArray(out), (long) out.length)));
+            return out;
         }
 
         @Override

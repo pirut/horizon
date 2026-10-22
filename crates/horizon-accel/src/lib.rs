@@ -14,7 +14,7 @@ use horizon_world::{
     registry::{BlockRegistry, BlockStateId},
     worldgen::{
         biome::BiomeId,
-        generator::{GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk},
+        generator::{GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk, StageTimings},
     },
 };
 use std::{
@@ -26,7 +26,7 @@ use std::{
 };
 
 /// Bumped whenever a signature or a layout below changes.
-pub const ABI: u32 = 1;
+pub const ABI: u32 = 2;
 
 /// One dimension's generator, shared by every Java worldgen thread.
 pub struct Accel {
@@ -162,6 +162,27 @@ impl Accel {
         Ok(Chunk {
             proto: result.map_err(|e| e.to_string())?,
         })
+    }
+
+    /// Wall time spent in each stage so far, summed over the idle workers
+    /// (all of them, between calls to [`Accel::generate`]).
+    pub fn stage_timings(&self) -> StageTimings {
+        let mut sum = StageTimings::default();
+        for t in self
+            .workers
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|w| w.stage_timings())
+        {
+            sum.chunks += t.chunks;
+            sum.biomes += t.biomes;
+            sum.noise += t.noise;
+            sum.surface += t.surface;
+            sum.structures += t.structures;
+            sum.carvers += t.carvers;
+        }
+        sum
     }
 
     /// Writes every block, section by section from the bottom, each section
@@ -542,6 +563,38 @@ pub unsafe extern "C" fn horizon_accel_chunk_postprocessing(
         unsafe { std::ptr::copy_nonoverlapping(marks.as_ptr(), out, n) };
     }
     marks.len()
+}
+
+/// Writes `[chunks, biomes, noise, surface, structures, carvers]` so far, the
+/// times in nanoseconds summed over threads ([`Accel::stage_timings`]), into
+/// `out`. Returns 0, or -1 when `len` is under 6.
+///
+/// # Safety
+/// `accel` must be live, `out` must point to `len` writable `i64`s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn horizon_accel_stage_timings(
+    accel: *const Accel,
+    out: *mut i64,
+    len: usize,
+) -> i32 {
+    guard(-1, || {
+        if len < 6 {
+            return Err(format!("{len} slots, not 6"));
+        }
+        // SAFETY: the caller passes a live generator and a buffer of `len`.
+        let (accel, out) = unsafe { (&*accel, std::slice::from_raw_parts_mut(out, len)) };
+        let t = accel.stage_timings();
+        let ns = |d: std::time::Duration| d.as_nanos() as i64;
+        out[..6].copy_from_slice(&[
+            t.chunks as i64,
+            ns(t.biomes),
+            ns(t.noise),
+            ns(t.surface),
+            ns(t.structures),
+            ns(t.carvers),
+        ]);
+        Ok(0)
+    })
 }
 
 /// # Safety
