@@ -99,6 +99,18 @@ pub(crate) struct Uniform {
     colors: [[f32; 4]; 4],
 }
 
+/// The cloud deck's underside: vanilla's Y 192.33, 129 blocks over its sea.
+/// An Earth world's ground is at its real height, so its deck keeps that far
+/// over the middle of the window, where the player was when it last moved,
+/// and moves with it.
+fn deck() -> f64 {
+    if crate::chunk::tall() {
+        f64::from(crate::chunk::min_y() + crate::chunk::HEIGHT / 2 + 129) + 0.33
+    } else {
+        192.33
+    }
+}
+
 impl Input<'_> {
     fn state(&self) -> (MeshKey, Uniform) {
         let (w, h, _) = self.texture;
@@ -110,7 +122,7 @@ impl Input<'_> {
         z -= (z / th).floor() * th;
         let cell_x = (x / 12.0).floor() as i64;
         let cell_z = (z / 12.0).floor() as i64;
-        let bottom = (192.33 - self.camera.y) as f32;
+        let bottom = (deck() - self.camera.y) as f32;
         let key = MeshKey {
             cell_x,
             cell_z,

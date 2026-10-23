@@ -10,7 +10,7 @@ use super::{Dim, Game, Mining, Screen};
 use horizon_client::first_person::Hand;
 use horizon_client::{
     Result,
-    chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section, block_strategy},
+    chunk::{BIOME_STRATEGY, Chunk, Light, SECTIONS, Section, block_strategy, min_y},
     containers::{BlockEntity, Furnace, FurnaceKind},
     entities::{Experience, ExperienceOrb, ItemEntity},
     hud::{HudBatch, rgba},
@@ -740,7 +740,7 @@ impl Game<'_> {
             .sections(r.dimension.sections(), 16, r.biome_bits)
             .map_err(|e| e.to_string())?;
         let mut chunk = Chunk::empty(p.x, p.z);
-        let offset = (r.dimension.min_y - MIN_Y).div_euclid(16);
+        let offset = (r.dimension.min_y - min_y()).div_euclid(16);
         // Biome table index per quart cell of the dimension's own sections.
         let mut biome_cells: Vec<[u32; 64]> = Vec::with_capacity(sections.len());
         for (i, s) in sections.iter().enumerate() {
@@ -831,7 +831,7 @@ impl Game<'_> {
         let sky = r.dimension.has_skylight;
         let mut above = [if sky { 15 } else { 0 }; 256];
         // Light section b is the dimension's section b - 1.
-        let first = (r.dimension.min_y - MIN_Y).div_euclid(16) - 1;
+        let first = (r.dimension.min_y - min_y()).div_euclid(16) - 1;
         for (b, layer) in light
             .layers(r.dimension.sections() + 2)
             .into_iter()

@@ -217,7 +217,7 @@ impl FluidInteractionWorld for MotionWorld<'_, '_, '_> {
         // fluid where a section without fluid would have skipped it.
         static SECTIONS: [bool; crate::chunk::SECTIONS] = [true; crate::chunk::SECTIONS];
         Ok(FluidSections {
-            minimum_section_y: crate::chunk::MIN_Y >> 4,
+            minimum_section_y: crate::chunk::min_y() >> 4,
             has_fluid: &SECTIONS,
         })
     }

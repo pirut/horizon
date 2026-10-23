@@ -52,7 +52,7 @@ impl FlatTerrain {
             ) {
                 continue;
             }
-            let height = crate::chunk::MIN_Y + i as i32 + 1;
+            let height = crate::chunk::min_y() + i as i32 + 1;
             if matches!(name, "minecraft:water" | "minecraft:lava") {
                 water.get_or_insert((height, state));
             } else {
@@ -73,7 +73,7 @@ impl FlatTerrain {
     }
     /// FlatLevelSource.getSpawnHeight: the top of the layers.
     pub fn spawn_height(&self) -> i32 {
-        crate::chunk::MIN_Y + self.layers.len().min(crate::chunk::HEIGHT as usize) as i32
+        crate::chunk::min_y() + self.layers.len().min(crate::chunk::HEIGHT as usize) as i32
     }
 }
 /// DimensionType.Y_SIZE: the most layers FlatLevelGeneratorSettings takes.

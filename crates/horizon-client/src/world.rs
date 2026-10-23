@@ -1,6 +1,6 @@
 //! Resident client world: streamed chunk columns plus the bookkeeping the game
 //! loop needs to relight and remesh after edits.
-use crate::chunk::{Chunk, MIN_Y, SECTIONS};
+use crate::chunk::{Chunk, SECTIONS, min_y};
 use horizon_core::random::LegacyRandom;
 use horizon_world::registry::BlockStateId;
 use std::{
@@ -245,7 +245,7 @@ impl World {
         let Some(chunk) = self.chunks.get_mut(&(x >> 4, z >> 4)) else {
             return Err("write outside resident chunks".into());
         };
-        if y < MIN_Y || y >= MIN_Y + (SECTIONS as i32) * 16 {
+        if y < min_y() || y >= min_y() + (SECTIONS as i32) * 16 {
             return Err("write outside world height".into());
         }
         let previous = Arc::make_mut(chunk).set(x & 15, y, z & 15, state.0);
@@ -261,12 +261,12 @@ impl World {
                 log.push((x, y, z));
             }
             self.modified.insert((x >> 4, z >> 4));
-            let sy = (y - MIN_Y) >> 4;
+            let sy = (y - min_y()) >> 4;
             for dz in -1..=1 {
                 for dy in -1..=1 {
                     for dx in -1..=1 {
                         let (bx, by, bz) = (x + dx, y + dy, z + dz);
-                        let s = (by - MIN_Y) >> 4;
+                        let s = (by - min_y()) >> 4;
                         if !(0..SECTIONS as i32).contains(&s) {
                             continue;
                         }
@@ -288,9 +288,9 @@ impl World {
         Ok(())
     }
     /// `getHeight(Heightmap.Types.WORLD_SURFACE, x, z)`: one above the highest
-    /// block that isn't `air`, or `MIN_Y` (also where the chunk isn't loaded).
+    /// block that isn't `air`, or `min_y()` (also where the chunk isn't loaded).
     pub fn world_surface(&self, x: i32, z: i32, air: impl Fn(BlockStateId) -> bool) -> i32 {
-        self.chunks.get(&(x >> 4, z >> 4)).map_or(MIN_Y, |chunk| {
+        self.chunks.get(&(x >> 4, z >> 4)).map_or(min_y(), |chunk| {
             chunk.world_surface(x, z, |v| air(BlockStateId(v)))
         })
     }

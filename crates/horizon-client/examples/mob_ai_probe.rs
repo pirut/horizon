@@ -8,7 +8,7 @@ use horizon_client::{
     beehive::HiveHost,
     biome::Biomes,
     blocks::BlockFacts,
-    chunk::{Chunk, HEIGHT, MIN_Y},
+    chunk::{Chunk, HEIGHT, VANILLA_MIN_Y as MIN_Y},
     collisions,
     containers::{BlockEntity, CreakingHeart},
     items::{ItemStack, Items},

@@ -287,7 +287,7 @@ impl Mob {
         near && !within_home(c, r, p)
     }
     fn default_check(&self, w: &MobWorld, h: f64, p: [i32; 3]) -> bool {
-        p[1] >= crate::chunk::MIN_Y
+        p[1] >= crate::chunk::min_y()
             && p[1] < 320
             && !self.restricted(h, p)
             && self.stable_destination(w, p)
@@ -419,7 +419,7 @@ impl Mob {
     ) -> Option<[i32; 3]> {
         let d = self.random_direction_within(0.0, f64::from(h), v, fly_height, xd, zd, max_rad)?;
         let mut p = self.toward(f64::from(h), d);
-        if p[1] < crate::chunk::MIN_Y || p[1] >= 320 || self.restricted(f64::from(h), p) {
+        if p[1] < crate::chunk::min_y() || p[1] >= 320 || self.restricted(f64::from(h), p) {
             return None;
         }
         // RandomPos.moveUpOutOfSolid
@@ -467,7 +467,7 @@ impl Mob {
             let d = m.random_direction_within(0.0, f64::from(h), v, 0, xd, zd, max_rad)?;
             // LandRandomPos.generateRandomPosTowardDirection
             let p = m.toward(f64::from(h), d);
-            if p[1] < crate::chunk::MIN_Y
+            if p[1] < crate::chunk::min_y()
                 || p[1] >= 320
                 || m.restricted(f64::from(h), p)
                 || !m.stable_destination(w, p)
@@ -489,7 +489,7 @@ impl Mob {
         self.pick_best(w, |m| {
             let d = m.random_direction(h, v);
             let p = m.toward(f64::from(h), d);
-            if p[1] < crate::chunk::MIN_Y
+            if p[1] < crate::chunk::min_y()
                 || p[1] >= 320
                 || m.restricted(f64::from(h), p)
                 || !m.stable_destination(w, p)
@@ -512,7 +512,7 @@ impl Mob {
         for _ in 0..10 {
             let d = self.random_direction(h, v);
             let p = self.toward(f64::from(h), d);
-            if p[1] < crate::chunk::MIN_Y || p[1] >= 320 || !self.stable_destination(w, p) {
+            if p[1] < crate::chunk::min_y() || p[1] >= 320 || !self.stable_destination(w, p) {
                 continue;
             }
             if let Some(p) = self.land_up_out_of_solid(w, p) {
@@ -555,7 +555,7 @@ impl Mob {
                 std::f64::consts::FRAC_PI_2,
             )?;
             let p = m.toward(f64::from(h), d);
-            if p[1] < crate::chunk::MIN_Y
+            if p[1] < crate::chunk::min_y()
                 || p[1] >= 320
                 || m.restricted(f64::from(h), p)
                 || !m.stable_destination(w, p)
@@ -585,7 +585,7 @@ impl Mob {
                 std::f64::consts::FRAC_PI_2,
             )?;
             let p = m.toward(f64::from(h), d);
-            if p[1] < crate::chunk::MIN_Y
+            if p[1] < crate::chunk::min_y()
                 || p[1] >= 320
                 || m.restricted(f64::from(h), p)
                 || !m.stable_destination(w, p)

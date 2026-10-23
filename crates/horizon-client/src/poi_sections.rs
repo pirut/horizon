@@ -82,7 +82,7 @@ impl<T: Copy> PoiSections<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chunk::{Chunk, MIN_Y};
+    use crate::chunk::{Chunk, min_y};
 
     #[test]
     fn lists_follow_edits_and_replacement() {
@@ -90,15 +90,15 @@ mod tests {
         let kind = |v: u32| (v == 5 || v == 6).then_some(v as u8);
         let mut chunk = Arc::new(Chunk::empty(0, 0));
         assert!(index.get((0, 0, 0), &chunk.sections[0], kind).is_empty());
-        Arc::make_mut(&mut chunk).set(3, MIN_Y + 2, 1, 6);
-        Arc::make_mut(&mut chunk).set(0, MIN_Y, 0, 5);
+        Arc::make_mut(&mut chunk).set(3, min_y() + 2, 1, 6);
+        Arc::make_mut(&mut chunk).set(0, min_y(), 0, 5);
         let found = index.get((0, 0, 0), &chunk.sections[0], kind);
         assert_eq!(&*found, &[(0, 5), (2 << 8 | 1 << 4 | 3, 6)]);
         // Unchanged: the cached list, not a rescan.
         let again = index.get((0, 0, 0), &chunk.sections[0], |_| panic!("rescanned"));
         assert!(Arc::ptr_eq(&found, &again));
         // An edit in place (no other owner) still invalidates the list.
-        Arc::make_mut(&mut chunk).set(0, MIN_Y, 0, 1);
+        Arc::make_mut(&mut chunk).set(0, min_y(), 0, 1);
         assert_eq!(
             &*index.get((0, 0, 0), &chunk.sections[0], kind),
             &[(2 << 8 | 1 << 4 | 3, 6)]
@@ -107,14 +107,14 @@ mod tests {
         Arc::make_mut(&mut chunk).sections[0] = Arc::new(Section::default());
         assert!(index.get((0, 0, 0), &chunk.sections[0], kind).is_empty());
         let mut other = Chunk::empty(0, 0);
-        other.set(1, MIN_Y, 1, 5);
+        other.set(1, min_y(), 1, 5);
         chunk = Arc::new(other);
         assert_eq!(
             &*index.get((0, 0, 0), &chunk.sections[0], kind),
             &[(1 << 4 | 1, 5)]
         );
         // An unused palette entry alone yields no POI.
-        Arc::make_mut(&mut chunk).set(1, MIN_Y, 1, 2);
+        Arc::make_mut(&mut chunk).set(1, min_y(), 1, 2);
         assert!(index.get((0, 0, 0), &chunk.sections[0], kind).is_empty());
     }
 

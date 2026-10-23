@@ -284,7 +284,7 @@ fn saved_proto_chunks_restore_exactly() {
         assert_eq!(generator.is_decorated(&restored), i == 4);
         let (a, b) = (generator.finish(original), generator.finish(restored));
         let (x, z) = keys[i];
-        for y in horizon_client::chunk::MIN_Y..horizon_client::chunk::MIN_Y + 384 {
+        for y in horizon_client::chunk::VANILLA_MIN_Y..horizon_client::chunk::VANILLA_MIN_Y + 384 {
             for lz in 0..16 {
                 for lx in 0..16 {
                     assert_eq!(

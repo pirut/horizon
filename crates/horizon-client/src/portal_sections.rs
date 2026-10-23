@@ -29,7 +29,7 @@ impl PortalSections {
         self.chunks.remove(key);
     }
     /// The sections of `chunk` whose palette may hold a portal, as a bitmask in
-    /// ascending section order (`MIN_Y` at bit 0). `portal` is only called while
+    /// ascending section order (`min_y()` at bit 0). `portal` is only called while
     /// (re)building an entry, so an unchanged chunk scans its palette once.
     pub fn get(
         &mut self,
@@ -62,7 +62,7 @@ impl PortalSections {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chunk::{MIN_Y, SECTIONS, Section};
+    use crate::chunk::{SECTIONS, Section, min_y};
 
     #[test]
     fn edits_replacements_compaction_and_reload() {
@@ -71,11 +71,11 @@ mod tests {
         assert_eq!(cache.get((0, 0), &chunk, |id| id == 7), 0);
         cache.get((0, 0), &chunk, |_| panic!("unchanged chunk rescanned"));
         let worker = chunk.clone();
-        Arc::make_mut(&mut chunk).set(0, MIN_Y, 0, 7);
+        Arc::make_mut(&mut chunk).set(0, min_y(), 0, 7);
         assert_eq!(cache.get((0, 0), &chunk, |id| id == 7), 1);
-        assert_eq!(worker.get(0, MIN_Y, 0), 0);
+        assert_eq!(worker.get(0, min_y(), 0), 0);
         // Even after the last portal block is removed, its unused palette entry counts.
-        Arc::make_mut(&mut chunk).set(0, MIN_Y, 0, 0);
+        Arc::make_mut(&mut chunk).set(0, min_y(), 0, 0);
         assert_eq!(cache.get((0, 0), &chunk, |id| id == 7), 1);
         Arc::make_mut(&mut Arc::make_mut(&mut chunk).sections[0]).compact();
         assert_eq!(cache.get((0, 0), &chunk, |id| id == 7), 0);
@@ -95,7 +95,7 @@ mod tests {
         let mut cache = PortalSections::default();
         let mut chunk = Arc::new(Chunk::empty(-2, 3));
         let before = cache.get((-2, 3), &chunk, |id| id == 1);
-        Arc::make_mut(&mut chunk).set(0, MIN_Y + 16, 0, 1);
+        Arc::make_mut(&mut chunk).set(0, min_y() + 16, 0, 1);
         assert_eq!(before, 0);
         assert_eq!(cache.get((-2, 3), &chunk, |id| id == 1), 1 << 1);
         let weak = Arc::downgrade(&chunk);

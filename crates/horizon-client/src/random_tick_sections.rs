@@ -1,7 +1,7 @@
 //! Memoized palette eligibility for the game thread's random-tick snapshot.
 use crate::{
     blocks::BlockFacts,
-    chunk::{Chunk, MIN_Y, SECTIONS},
+    chunk::{Chunk, SECTIONS, min_y},
     fast_hash::FxHashMap,
 };
 use horizon_world::registry::BlockStateId;
@@ -18,7 +18,7 @@ impl Iterator for Sections {
         }
         let index = self.0.trailing_zeros();
         self.0 &= self.0 - 1;
-        Some(MIN_Y + index as i32 * 16)
+        Some(min_y() + index as i32 * 16)
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
         let len = self.0.count_ones() as usize;
@@ -89,16 +89,16 @@ mod tests {
         assert_eq!(cache.get_with((0, 0), &chunk, |id| id == 1).len(), 0);
         cache.get_with((0, 0), &chunk, |_| panic!("unchanged chunk rescanned"));
         let worker = chunk.clone();
-        Arc::make_mut(&mut chunk).set(0, MIN_Y, 0, 1);
+        Arc::make_mut(&mut chunk).set(0, min_y(), 0, 1);
         assert_eq!(
             cache
                 .get_with((0, 0), &chunk, |id| id == 1)
                 .collect::<Vec<_>>(),
-            [MIN_Y]
+            [min_y()]
         );
-        assert_eq!(worker.get(0, MIN_Y, 0), 0);
+        assert_eq!(worker.get(0, min_y(), 0), 0);
         // Even after the last ticking block is removed, its unused palette entry counts.
-        Arc::make_mut(&mut chunk).set(0, MIN_Y, 0, 0);
+        Arc::make_mut(&mut chunk).set(0, min_y(), 0, 0);
         assert_eq!(cache.get_with((0, 0), &chunk, |id| id == 1).len(), 1);
         Arc::make_mut(&mut Arc::make_mut(&mut chunk).sections[0]).compact();
         assert_eq!(cache.get_with((0, 0), &chunk, |id| id == 1).len(), 0);
@@ -114,13 +114,13 @@ mod tests {
         let mut cache = RandomTickSections::default();
         let mut chunk = Arc::new(Chunk::empty(-2, 3));
         let before_scheduled = cache.get_with((-2, 3), &chunk, |id| id == 1);
-        Arc::make_mut(&mut chunk).set(0, MIN_Y + 16, 0, 1);
+        Arc::make_mut(&mut chunk).set(0, min_y() + 16, 0, 1);
         assert_eq!(before_scheduled.len(), 0);
         assert_eq!(
             cache
                 .get_with((-2, 3), &chunk, |id| id == 1)
                 .collect::<Vec<_>>(),
-            [MIN_Y + 16]
+            [min_y() + 16]
         );
         let weak = Arc::downgrade(&chunk);
         drop(chunk);
@@ -143,7 +143,11 @@ mod tests {
             cache
                 .get_with((0, 0), &chunk, |id| id == 40000)
                 .collect::<Vec<_>>(),
-            [MIN_Y, MIN_Y + 9 * 16, MIN_Y + (SECTIONS as i32 - 1) * 16]
+            [
+                min_y(),
+                min_y() + 9 * 16,
+                min_y() + (SECTIONS as i32 - 1) * 16
+            ]
         );
     }
 }
@@ -303,7 +307,7 @@ mod tick_parity {
                             s.blocks
                                 .maybe_has(|id| facts.get(BlockStateId(id)).random_ticks)
                         })
-                        .map(|(i, _)| MIN_Y + i as i32 * 16)
+                        .map(|(i, _)| min_y() + i as i32 * 16)
                         .collect();
                     (key, sections)
                 })
@@ -323,7 +327,7 @@ mod tick_parity {
             // Stand in for an inside-block/scheduled write AFTER eligibility capture.
             if step == 20 {
                 for level in [&mut original, &mut cached] {
-                    level.set_raw(BlockPos::new(0, MIN_Y + 16, 0), grass);
+                    level.set_raw(BlockPos::new(0, min_y() + 16, 0), grass);
                 }
             }
             for ((x, z), sections) in old {

@@ -2,7 +2,7 @@
 //! (sections with their paletted containers, block entities and the sky and
 //! block DataLayers) and the section block-change batches.
 use crate::{
-    chunk::{Chunk, Light, MIN_Y, SECTIONS, Section},
+    chunk::{Chunk, Light, SECTIONS, Section, min_y},
     containers::BlockEntity,
     fast_hash::FxHashMap,
 };
@@ -461,7 +461,7 @@ impl ChunkEncoder {
     /// The level's min_y and height (`DimensionType`), the heightmaps' range.
     fn level(&self) -> (i32, i32) {
         (
-            MIN_Y + 16 * self.sections.start as i32,
+            min_y() + 16 * self.sections.start as i32,
             16 * self.sections.len() as i32,
         )
     }
@@ -520,7 +520,7 @@ impl ChunkEncoder {
     /// Encode for a level of `min_y` and `height` (multiples of 16 within
     /// the column), with or without sky light.
     pub fn set_dimension(&mut self, min_y: i32, height: i32, sky: bool) {
-        let lo = usize::try_from((min_y - MIN_Y) >> 4)
+        let lo = usize::try_from((min_y - crate::chunk::min_y()) >> 4)
             .unwrap_or(0)
             .min(SECTIONS);
         let n = usize::try_from(height >> 4).unwrap_or(SECTIONS);
@@ -813,7 +813,7 @@ impl ChunkEncoder {
                     i32::from(index >> 8),
                     i32::from(index >> 4 & 15),
                 );
-                let wy = MIN_Y + (i as i32) * 16 + y;
+                let wy = min_y() + (i as i32) * 16 + y;
                 let pos = (chunk.x * 16 + x, wy, chunk.z * 16 + z);
                 entity_infos.push(BlockEntityInfo {
                     packed_xz: ((x << 4) | z) as i8,
@@ -1107,7 +1107,7 @@ mod tests {
         let encoder = ChunkEncoder::new(states, &builtin, &[], &[]);
         let mut chunk = Chunk::empty(2, -3);
         for (x, y, z, state) in [(15, 3, 0, 2), (0, 3, 15, 3), (4, 3, 4, 1), (7, 40, 2, 2)] {
-            chunk.set(x, MIN_Y + y, z, state);
+            chunk.set(x, min_y() + y, z, state);
         }
         // Every block of a section looked at, as the scan did before the cache.
         let scan = |chunk: &Chunk| {
@@ -1118,7 +1118,7 @@ mod tests {
                         for x in 0..16 {
                             let state = s.get(crate::chunk::index(x, y, z));
                             if let Some(kind) = encoder.entity_type(state) {
-                                found.push((x, MIN_Y + i as i32 * 16 + y, z, kind));
+                                found.push((x, min_y() + i as i32 * 16 + y, z, kind));
                             }
                         }
                     }
@@ -1151,8 +1151,8 @@ mod tests {
         assert_eq!(sent(&chunk), expected);
         // From the cache the second time, and after an edit.
         assert_eq!(sent(&chunk), expected);
-        chunk.set(15, MIN_Y + 3, 0, 0);
-        chunk.set(9, MIN_Y + 3, 9, 3);
+        chunk.set(15, min_y() + 3, 0, 0);
+        chunk.set(9, min_y() + 3, 9, 3);
         assert_eq!(sent(&chunk), scan(&chunk));
     }
 
@@ -1173,7 +1173,7 @@ mod tests {
     fn cached_sections_follow_edits() {
         let encoder = encoder();
         let mut chunk = Chunk::empty(0, 0);
-        chunk.set(1, MIN_Y + 2, 3, 1);
+        chunk.set(1, min_y() + 2, 3, 1);
         let before = encoder.encode(&chunk, &HashMap::new());
         assert_eq!(encoder.occupied(&chunk), 1);
         assert_eq!(
@@ -1181,8 +1181,8 @@ mod tests {
             fresh(&encoder, &chunk.sections[0])
         );
         // An edit moves the section: the cache sees a new one.
-        chunk.set(4, MIN_Y + 20, 4, 2);
-        chunk.set(1, MIN_Y + 2, 3, 0);
+        chunk.set(4, min_y() + 20, 4, 2);
+        chunk.set(1, min_y() + 2, 3, 0);
         assert_eq!(encoder.occupied(&chunk), 2);
         let after = encoder.encode(&chunk, &HashMap::new());
         assert_ne!(before.chunk.buffer, after.chunk.buffer);
@@ -1336,7 +1336,12 @@ mod tests {
                 let n = (x * 7 + z * 13).rem_euclid(17);
                 for i in 0..40 + n * 30 {
                     let (bx, bz) = ((i * 5 + n) % 16, (i * 11) % 16);
-                    chunk.set(bx, MIN_Y + (i * 37 + n * 50) % 384, bz, 1 + (i % 3) as u32);
+                    chunk.set(
+                        bx,
+                        min_y() + (i * 37 + n * 50) % 384,
+                        bz,
+                        1 + (i % 3) as u32,
+                    );
                 }
                 let mut light = Box::new([0u8; 4096]);
                 for (i, v) in light.iter_mut().enumerate() {

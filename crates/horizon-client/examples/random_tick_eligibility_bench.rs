@@ -2,7 +2,7 @@
 //! cargo run --profile fast -p horizon-client --example random_tick_eligibility_bench -- RESOURCES
 use horizon_client::{
     blocks::BlockFacts,
-    chunk::{Chunk, MIN_Y, Section},
+    chunk::{Chunk, Section, VANILLA_MIN_Y as MIN_Y},
     fast_hash::FxHashMap,
     random_tick_sections::RandomTickSections,
 };

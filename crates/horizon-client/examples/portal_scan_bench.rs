@@ -4,7 +4,7 @@
 //! cargo run --profile fast -p horizon-client --example portal_scan_bench -- RESOURCES
 use horizon_client::{
     blocks::BlockFacts,
-    chunk::{Chunk, MIN_Y, SECTIONS, Section},
+    chunk::{Chunk, SECTIONS, Section, VANILLA_MIN_Y as MIN_Y},
     fast_hash::FxHashMap,
     portal_sections::PortalSections,
 };

@@ -213,10 +213,10 @@ impl Game<'_> {
     /// highest non-air one.
     pub(super) fn surface_height(&self, x: i32, z: i32) -> i32 {
         let top = if self.dim == Dim::Nether { 127 } else { 319 };
-        (horizon_client::chunk::MIN_Y..=top)
+        (horizon_client::chunk::min_y()..=top)
             .rev()
             .find(|&y| !self.res.facts().is_air(self.world.block(x, y, z)))
-            .map_or(horizon_client::chunk::MIN_Y, |y| y + 1)
+            .map_or(horizon_client::chunk::min_y(), |y| y + 1)
     }
     /// Every claimed village point of interest (job sites, beds, bells).
     fn village_pois(&self) -> Vec<[i32; 3]> {
