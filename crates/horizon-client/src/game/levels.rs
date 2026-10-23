@@ -110,7 +110,7 @@ impl Game<'_> {
     /// A new level for `dim`, opened from the save (`MinecraftServer.createLevels`).
     fn open_level(&self, dim: Dim) -> Result<Parked> {
         let (streaming, save) =
-            self.make_streaming(&self.world_root.clone(), dim, self.level.seed)?;
+            self.make_streaming(&self.world_root.clone(), dim, self.level.seed, None)?;
         let mut world = World::new(self.res.facts().air, self.level.seed);
         world.fast_lava = dim == Dim::Nether;
         Ok(Parked {
@@ -163,6 +163,8 @@ impl Game<'_> {
         use std::mem::swap;
         swap(&mut self.world, &mut p.world);
         swap(&mut self.streaming, &mut p.streaming);
+        // The level in place sets the window (an Earth world's moves).
+        horizon_client::chunk::set_window(self.streaming.min_y, self.streaming.earth.is_some());
         swap(&mut self.save, &mut p.save);
         swap(&mut self.block_ticks, &mut p.block_ticks);
         swap(&mut self.tick_chunks, &mut p.tick_chunks);

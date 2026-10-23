@@ -37,6 +37,7 @@ mod dedicated;
 mod dispense_fixture;
 mod dispenser;
 mod dragon;
+mod earth_window;
 mod enchant_effects;
 mod end;
 mod entity_culling;
@@ -162,7 +163,7 @@ use horizon_client::{
     audio::Audio,
     biome::Biomes,
     blocks::{BlockFacts, Fluid},
-    chunk::{HEIGHT, MIN_Y},
+    chunk::{HEIGHT, min_y},
     clock::FixedStep,
     collisions,
     containers::{BlockEntity, Providers},
@@ -599,7 +600,24 @@ impl LevelAccess for GameLevel<'_> {
         self.world.world_surface(x, z, |s| self.facts.is_air(s))
     }
     fn precipitation(&self, pos: BlockPos) -> Option<horizon_world::level::Precipitation> {
-        self.behaviours.precipitation_info(self, pos)
+        let mut info = self.behaviours.precipitation_info(self, pos)?;
+        // An Earth world's biomes come from the real climate at their height:
+        // vanilla's cooling above Y 80 would snow on every hill (Earth
+        // Platform's CubicWeather), so a biome that rains at sea level rains.
+        if horizon_client::chunk::tall()
+            && info.kind == horizon_world::level::PrecipitationKind::Snow
+            && self
+                .world
+                .chunks
+                .get(&(pos.x >> 4, pos.z >> 4))
+                .is_some_and(|c| {
+                    let biome = c.biome(info.top.x, info.top.y - 1, info.top.z);
+                    !horizon_client::earthgen::snows(self.biomes.get(biome).temperature)
+                })
+        {
+            info.kind = horizon_world::level::PrecipitationKind::Rain;
+        }
+        Some(info)
     }
     fn is_raining_at(&self, pos: BlockPos) -> bool {
         self.behaviours.is_raining_at(self, pos)
@@ -660,7 +678,7 @@ impl LevelAccess for GameLevel<'_> {
         self.world.block(pos.x, pos.y, pos.z)
     }
     fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
-        if !self.world.loaded(pos.x, pos.z) || pos.y < MIN_Y || pos.y >= MIN_Y + HEIGHT {
+        if !self.world.loaded(pos.x, pos.z) || pos.y < min_y() || pos.y >= min_y() + HEIGHT {
             return None;
         }
         let previous = self.world.block(pos.x, pos.y, pos.z);
@@ -674,7 +692,7 @@ impl LevelAccess for GameLevel<'_> {
         if self.dimension != LevelDimension::Overworld {
             0
         } else {
-            MIN_Y
+            min_y()
         }
     }
     fn max_y(&self) -> i32 {
@@ -682,7 +700,7 @@ impl LevelAccess for GameLevel<'_> {
         if self.dimension != LevelDimension::Overworld {
             256
         } else {
-            MIN_Y + HEIGHT
+            min_y() + HEIGHT
         }
     }
     fn random(&mut self) -> &mut horizon_core::random::LegacyRandom {
@@ -1523,7 +1541,7 @@ impl Dim {
     /// `Level.getMinY`: the dimension type's minimum y.
     fn min_y(self) -> i32 {
         match self {
-            Self::Overworld => MIN_Y,
+            Self::Overworld => min_y(),
             Self::Nether | Self::End => 0,
         }
     }
@@ -1538,7 +1556,7 @@ impl Dim {
     /// `Level.getMaxY`: the dimension type's minimum y plus height, less one.
     fn max_y(self) -> i32 {
         match self {
-            Self::Overworld => MIN_Y + HEIGHT - 1,
+            Self::Overworld => min_y() + HEIGHT - 1,
             Self::Nether | Self::End => 255,
         }
     }
@@ -2770,7 +2788,7 @@ impl Game<'_> {
             // ticks (100 outside the world) and drops itself as an item.
             let y = next.y.floor() as i32;
             let outside =
-                y <= horizon_client::chunk::MIN_Y || y >= horizon_client::chunk::MIN_Y + 384;
+                y <= horizon_client::chunk::min_y() || y >= horizon_client::chunk::min_y() + 384;
             if !on_ground && (f.age > 100 && outside || f.age > 600) {
                 if f.drop_item && entity_drops {
                     dropped.push((f.state, next));
@@ -3597,8 +3615,8 @@ impl Game<'_> {
             }
             return None;
         }
-        let mut y = MIN_Y + HEIGHT - 1;
-        while y > MIN_Y {
+        let mut y = min_y() + HEIGHT - 1;
+        while y > min_y() {
             let s = self.world.block(x, y, z);
             if !self.res.facts().is_air(s) {
                 let f = self.res.facts().get(s);
@@ -4038,7 +4056,7 @@ impl Game<'_> {
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };
-        if player.position.y < f64::from(MIN_Y - 64) {
+        if player.position.y < f64::from(min_y() - 64) {
             // Out of the world.
             let _ = player.set_health(0.0, false);
         }
@@ -7135,6 +7153,7 @@ impl Game<'_> {
         world_root: &std::path::Path,
         dim: Dim,
         seed: i64,
+        around: Option<f64>,
     ) -> Result<(Streaming, Arc<SaveDir>)> {
         let (streaming, save, locator) = world_loading::make_streaming(
             &self.res,
@@ -7144,6 +7163,7 @@ impl Game<'_> {
             world_root,
             dim,
             seed,
+            around,
         )?;
         self.end.set_locator(locator);
         Ok((streaming, save))
@@ -7184,8 +7204,12 @@ impl Game<'_> {
             from.y,
             from.z * scale,
         ));
-        let (streaming, save) =
-            self.make_streaming(&self.world_root.clone(), target, self.level.seed)?;
+        let (streaming, save) = self.make_streaming(
+            &self.world_root.clone(),
+            target,
+            self.level.seed,
+            Some(destination.y),
+        )?;
         let mut world = World::new(self.res.facts().air, self.level.seed);
         world.fast_lava = target == Dim::Nether;
         world.game_time = self.world.game_time;
@@ -8533,7 +8557,8 @@ impl Game<'_> {
         if !b.precipitation {
             return None;
         }
-        let t = if y > 80 {
+        // An Earth world's biomes keep their own climate at any height (see `GameLevel::precipitation`).
+        let t = if y > 80 && !horizon_client::chunk::tall() {
             b.temperature - (y - 80) as f32 * 0.05 / 40.0
         } else {
             b.temperature
@@ -8543,7 +8568,7 @@ impl Game<'_> {
     /// The first motion-blocking block from the top (Heightmap MOTION_BLOCKING).
     fn rain_height(&self, x: i32, z: i32, from: i32) -> i32 {
         let mut y = from;
-        while y > MIN_Y {
+        while y > min_y() {
             let s = self.world.block(x, y, z);
             let f = self.res.facts().get(s);
             if f.full_collision || f.fluid != Fluid::None || f.name.contains("leaves") {
@@ -8551,7 +8576,7 @@ impl Game<'_> {
             }
             y -= 1;
         }
-        MIN_Y
+        min_y()
     }
     fn tick_weather_effects(&mut self) {
         if self.flash > 0 {
@@ -10766,6 +10791,7 @@ impl ApplicationHandler for Game<'_> {
                     if self.title.is_none() {
                         horizon_client::spans::time("update_world", || self.update_world());
                         horizon_client::spans::time("spawn_player", || self.spawn_player())?;
+                        self.follow_earth_window()?;
                     }
                     let updated = Instant::now();
                     self.track_toggle_screens();

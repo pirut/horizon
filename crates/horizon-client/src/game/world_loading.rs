@@ -75,8 +75,7 @@ impl WorldRequest {
             let mut generation = o.world_gen();
             if o.earth {
                 let (latitude, longitude) = horizon_client::earthgen::Place::YOSEMITE;
-                generation.earth =
-                    Some(horizon_client::earthgen::Place::settle(latitude, longitude));
+                generation.earth = Some(horizon_client::earthgen::Place::at(latitude, longitude));
             }
             horizon_client::save::write_world_gen_settings(&save_root, level.seed, generation)?;
         }
@@ -86,7 +85,7 @@ impl WorldRequest {
             && let Some((latitude, longitude)) = options.earth
         {
             let generation = horizon_client::save::WorldGen {
-                earth: Some(horizon_client::earthgen::Place::settle(latitude, longitude)),
+                earth: Some(horizon_client::earthgen::Place::at(latitude, longitude)),
                 ..Default::default()
             };
             horizon_client::save::write_world_gen_settings(&save_root, level.seed, generation)?;
@@ -101,8 +100,16 @@ impl WorldRequest {
             level.position = None;
         }
         let dim = Dim::from_id(&level.dimension);
-        let (mut streaming, save, locator) =
-            make_streaming(res, pack, options, settings, &save_root, dim, level.seed)?;
+        let (mut streaming, save, locator) = make_streaming(
+            res,
+            pack,
+            options,
+            settings,
+            &save_root,
+            dim,
+            level.seed,
+            level.position.map(|p| p[1]),
+        )?;
         streaming.radius = settings.render_distance;
         let mut world = World::new(res.facts().air, level.seed);
         world.fast_lava = dim == Dim::Nether;
@@ -200,11 +207,8 @@ pub(super) fn make_streaming(
     world_root: &std::path::Path,
     dim: Dim,
     seed: i64,
+    around: Option<f64>,
 ) -> Result<(Streaming, Arc<SaveDir>, Option<Arc<VanillaTerrain>>)> {
-    let save = Arc::new(SaveDir::new(horizon_client::save::dimension_dir(
-        world_root,
-        dim.id(),
-    )));
     let mut locator = None;
     let gen_settings = (dim == Dim::Overworld)
         .then(|| horizon_client::save::world_gen_settings(world_root))
@@ -212,15 +216,22 @@ pub(super) fn make_streaming(
     let earth = gen_settings
         .as_ref()
         .and_then(horizon_client::earthgen::Place::from_settings);
+    let mut save = SaveDir::new(horizon_client::save::dimension_dir(world_root, dim.id()));
+    save.tall = earth.is_some();
+    let save = Arc::new(save);
+    horizon_client::chunk::set_window(horizon_client::chunk::VANILLA_MIN_Y, false);
     let flat = gen_settings.filter(|_| earth.is_none()).and_then(|s| {
         horizon_client::flatgen::FlatTerrain::from_settings(&s, pack.assets.registry, res.biomes())
     });
     let mut streaming = if let Some(place) = earth {
-        let inner = horizon_client::earthgen::EarthTerrain::new(
+        let inner = horizon_client::earthgen::EarthTerrain::open(
             place,
             pack.assets.registry,
             res.biomes().clone(),
         )?;
+        // The window of cubes: around the player, or a new world's spawn.
+        let y = around.map_or_else(|| inner.spawn().1, |y| y.floor() as i32);
+        horizon_client::chunk::set_window(inner.window(y), true);
         let mut streaming = Streaming::new(
             Arc::new(Persistent {
                 inner: inner.clone(),

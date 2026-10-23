@@ -6,7 +6,7 @@ use horizon_client::{
     assets::{Assets, RenderAssets},
     biome::{BiomeInfo, Biomes, GrassModifier},
     blocks::BlockFacts,
-    chunk::{Chunk, Light, MIN_Y, index},
+    chunk::{Chunk, Light, VANILLA_MIN_Y as MIN_Y, index},
     mesher::{MeshTables, Mesher, OPAQUE_LAYER, TerrainVertex},
     models,
 };

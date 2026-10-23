@@ -5,7 +5,29 @@ use horizon_core::paletted::{PalettedContainer, Strategy};
 use horizon_world::registry::BlockStateId;
 use std::sync::{Arc, OnceLock};
 
-pub const MIN_Y: i32 = -64;
+/// Vanilla's lowest block, every world's but an Earth world's.
+pub const VANILLA_MIN_Y: i32 = -64;
+/// The loaded level's lowest block. An Earth world's 384 blocks are a window on
+/// its true heights that moves with the player (docs/earth.md); other worlds
+/// keep vanilla's.
+static MIN_Y: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(VANILLA_MIN_Y);
+#[inline]
+pub fn min_y() -> i32 {
+    MIN_Y.load(std::sync::atomic::Ordering::Relaxed)
+}
+static TALL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Whether the loaded level is an Earth world, its blocks a window on its true heights.
+#[inline]
+pub fn tall() -> bool {
+    TALL.load(std::sync::atomic::Ordering::Relaxed)
+}
+/// Sets the window, a whole number of sections, and whether it is an Earth
+/// world's: only while no chunk of the level is loaded, as a level opens.
+pub fn set_window(min_y: i32, tall: bool) {
+    assert_eq!(min_y & 15, 0, "the window starts at a section");
+    MIN_Y.store(min_y, std::sync::atomic::Ordering::Relaxed);
+    TALL.store(tall, std::sync::atomic::Ordering::Relaxed);
+}
 pub const HEIGHT: i32 = 384;
 pub const SECTIONS: usize = (HEIGHT / 16) as usize;
 
@@ -123,7 +145,7 @@ pub struct Chunk {
     pub z: i32,
     pub sections: Vec<Arc<Section>>,
     /// `Heightmap.Types.WORLD_SURFACE` per column (`z << 4 | x`): one above
-    /// the highest non-air block, or `MIN_Y`. Built on the first read; a
+    /// the highest non-air block, or `min_y()`. Built on the first read; a
     /// `set` that can move a column's surface drops it.
     surface: OnceLock<Box<[i16; 256]>>,
     pub lit: bool,
@@ -168,7 +190,7 @@ impl Chunk {
     }
     #[inline]
     pub fn get(&self, x: i32, y: i32, z: i32) -> u32 {
-        let s = (y - MIN_Y) >> 4;
+        let s = (y - min_y()) >> 4;
         if !(0..SECTIONS as i32).contains(&s) {
             return 0;
         }
@@ -187,12 +209,12 @@ impl Chunk {
             .rev()
             .filter(|(_, section)| !section.is_uniform(skip))
             .find_map(|(s, _)| {
-                let base = MIN_Y + s as i32 * 16;
+                let base = min_y() + s as i32 * 16;
                 (base..base + 16).rev().find(|&y| matches(y))
             })
     }
     pub fn set(&mut self, x: i32, y: i32, z: i32, v: u32) -> u32 {
-        let s = (y - MIN_Y) >> 4;
+        let s = (y - min_y()) >> 4;
         if !(0..SECTIONS as i32).contains(&s) {
             return v;
         }
@@ -208,7 +230,7 @@ impl Chunk {
         previous
     }
     /// `getHeight(Heightmap.Types.WORLD_SURFACE, x, z)` (`x`, `z` within the
-    /// chunk): one above the highest block that isn't `air`, or `MIN_Y`.
+    /// chunk): one above the highest block that isn't `air`, or `min_y()`.
     /// Sections must change only through `set` once this has been read.
     pub fn world_surface(&self, x: i32, z: i32, air: impl Fn(u32) -> bool) -> i32 {
         let surface = self.surface.get_or_init(|| self.prime_surface(air));
@@ -217,7 +239,7 @@ impl Chunk {
     /// `Heightmap.primeHeightmaps` for WORLD_SURFACE: each section from the
     /// top, skipping those of one air state, until every column is found.
     fn prime_surface(&self, air: impl Fn(u32) -> bool) -> Box<[i16; 256]> {
-        let mut surface = Box::new([MIN_Y as i16; 256]);
+        let mut surface = Box::new([min_y() as i16; 256]);
         let mut found = [false; 256];
         let mut left = 256;
         let mut values = [0u32; 4096];
@@ -229,7 +251,7 @@ impl Chunk {
                 continue;
             }
             section.unpack(&mut values);
-            let base = MIN_Y + s as i32 * 16;
+            let base = min_y() + s as i32 * 16;
             for i in 0..256 {
                 if found[i] {
                     continue;
@@ -245,7 +267,7 @@ impl Chunk {
     }
     #[inline]
     pub fn light(&self, x: i32, y: i32, z: i32) -> u8 {
-        let s = (y - MIN_Y) >> 4;
+        let s = (y - min_y()) >> 4;
         if s < 0 {
             return 0;
         }
@@ -262,7 +284,7 @@ impl Chunk {
     /// the quart y clamped to the column).
     #[inline]
     pub fn biome(&self, x: i32, y: i32, z: i32) -> u16 {
-        let qy = ((y - MIN_Y) >> 2).clamp(0, HEIGHT / 4 - 1);
+        let qy = ((y - min_y()) >> 2).clamp(0, HEIGHT / 4 - 1);
         self.sections[(qy >> 2) as usize]
             .biomes
             .get(((qy & 3) << 4 | ((z & 15) >> 2) << 2 | (x & 15) >> 2) as usize) as u16
@@ -286,7 +308,7 @@ mod tests {
         let mut chunk = Chunk::empty(0, 0);
         // Stone low down, cave air (uniform in its section) above it, and a
         // section of air with one stone block higher up.
-        for y in MIN_Y..MIN_Y + 40 {
+        for y in min_y()..min_y() + 40 {
             chunk.set(3, y, 4, stone);
         }
         for i in 0..4096 {
@@ -294,7 +316,7 @@ mod tests {
         }
         chunk.set(3, 150, 4, stone);
         let full = |c: &Chunk, matches: &dyn Fn(u32) -> bool| {
-            (MIN_Y..MIN_Y + HEIGHT)
+            (min_y()..min_y() + HEIGHT)
                 .rev()
                 .find(|&y| matches(c.get(3, y, 4)))
         };
@@ -319,14 +341,14 @@ mod tests {
         let (air, cave_air, stone) = (0, 7, 1);
         let is_air = |v: u32| v == air || v == cave_air;
         let scan = |c: &Chunk, x: i32, z: i32| {
-            (MIN_Y..MIN_Y + HEIGHT)
+            (min_y()..min_y() + HEIGHT)
                 .rev()
                 .find(|&y| !is_air(c.get(x, y, z)))
-                .map_or(MIN_Y, |y| y + 1)
+                .map_or(min_y(), |y| y + 1)
         };
         let mut chunk = Chunk::empty(0, 0);
-        assert_eq!(chunk.world_surface(5, 5, is_air), MIN_Y);
-        for y in MIN_Y..MIN_Y + 70 {
+        assert_eq!(chunk.world_surface(5, 5, is_air), min_y());
+        for y in min_y()..min_y() + 70 {
             for i in 0..256 {
                 chunk.set(i & 15, y, i >> 4, stone);
             }
@@ -339,7 +361,7 @@ mod tests {
         for step in 0..4000 {
             let x = random.next_int_bound(16).unwrap();
             let z = random.next_int_bound(16).unwrap();
-            let y = MIN_Y + 40 + random.next_int_bound(120).unwrap();
+            let y = min_y() + 40 + random.next_int_bound(120).unwrap();
             let v = [air, cave_air, stone][random.next_int_bound(3).unwrap() as usize];
             chunk.set(x, y, z, v);
             if step % 7 == 0 {
@@ -353,7 +375,7 @@ mod tests {
         }
         // Out-of-range writes and unchanged states keep the map.
         let before = chunk.world_surface(3, 3, is_air);
-        chunk.set(3, MIN_Y + HEIGHT, 3, stone);
+        chunk.set(3, min_y() + HEIGHT, 3, stone);
         chunk.set(3, before - 1, 3, chunk.get(3, before - 1, 3));
         assert!(chunk.surface.get().is_some());
         assert_eq!(chunk.world_surface(3, 3, |_| unreachable!()), before);

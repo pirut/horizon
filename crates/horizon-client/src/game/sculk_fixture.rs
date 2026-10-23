@@ -7,7 +7,7 @@
 use super::{Game, dispense_fixture};
 use horizon_client::{
     Result,
-    chunk::{Chunk, MIN_Y},
+    chunk::{Chunk, min_y},
     command::args::GameMode,
     containers::BlockEntity,
     mobs::{Mob, Who},
@@ -327,7 +327,7 @@ impl Game<'_> {
                     for z in 0..16 {
                         for (y, layer) in layers.iter().enumerate() {
                             self.world
-                                .set(cx * 16 + x, MIN_Y + y as i32, cz * 16 + z, *layer)?;
+                                .set(cx * 16 + x, min_y() + y as i32, cz * 16 + z, *layer)?;
                         }
                     }
                 }

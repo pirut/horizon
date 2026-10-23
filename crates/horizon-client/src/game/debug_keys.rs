@@ -744,7 +744,7 @@ impl Game<'_> {
                 p.position.y.floor() as i32,
                 p.position.z.floor() as i32,
             ];
-            let min_y = horizon_client::chunk::MIN_Y;
+            let min_y = horizon_client::chunk::min_y();
             g.chunk_borders(block, min_y, min_y + horizon_client::chunk::HEIGHT - 1);
         }
         if !self.show_hitboxes {

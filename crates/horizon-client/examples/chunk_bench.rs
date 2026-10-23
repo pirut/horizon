@@ -8,7 +8,7 @@ use horizon_client::{
     assets::Assets,
     biome::Biomes,
     blocks::BlockFacts,
-    chunk::{Chunk, MIN_Y, SECTIONS},
+    chunk::{Chunk, SECTIONS, VANILLA_MIN_Y as MIN_Y},
     light::{LightTables, apply_lighting, light_chunk},
     mesher::{MeshTables, Mesher},
     models,

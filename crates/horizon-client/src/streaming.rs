@@ -55,6 +55,9 @@ pub trait ChunkGenerator: Send + Sync + 'static {
     fn load(&self, _x: i32, _z: i32) -> Option<Chunk> {
         None
     }
+    /// Generate the sections of a loaded chunk its record doesn't hold (a mask
+    /// by section index): a tall world saves the heights it was played at.
+    fn fill_unsaved(&self, _chunk: &mut Chunk, _saved: u32) {}
     /// What a loaded chunk needs from the generator before the game uses it,
     /// on the worker that loaded it.
     fn prepare_loaded(&self, _worker: &mut Self::Worker, _chunk: &Chunk) {}
@@ -243,8 +246,10 @@ pub struct Streaming {
     sequence: u64,
     pub center: (i32, i32),
     pub radius: i32,
-    /// An Earth world's generator, for its spawn.
+    /// An Earth world's generator, for its spawn and its window of cubes.
     pub earth: Option<Arc<crate::earthgen::EarthTerrain>>,
+    /// The level's lowest block (`chunk::min_y` while it is in place).
+    pub min_y: i32,
     /// `/forceload`ed chunks: kept loaded whatever the distance.
     pub forced: HashSet<(i32, i32)>,
     /// No work is scheduled while paused (title screen).
@@ -547,6 +552,7 @@ impl Streaming {
             center: (0, 0),
             radius: 8,
             earth: None,
+            min_y: crate::chunk::min_y(),
             forced: HashSet::new(),
             paused: false,
             sky_light: true,

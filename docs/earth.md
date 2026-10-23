@@ -66,20 +66,40 @@ Valley; `horizon-client --world NAME --earth LAT,LON` makes one anywhere (a new 
 generator is `horizon:earth` in `world_gen_settings`, with its latitude, longitude and `shift`. Earth Platform's
 `earthplatform/cache` folder in the game folder is read and filled, so the two share downloads.
 
-Until the cubic engine below lands, chunks are still vanilla's 384 blocks tall. An Earth world keeps the true
-heights and shows a 384-block window of them: when the world is made, `shift` (the Earth Y of world Y 0, a whole
-number of cubes) is set so the spawn's ground stands near Y 16, leaving about 300 blocks of climb before the
-window's top. Ground above the window is cut flat at Y 319. Far terrain (`crate::lod`) has no such limit and
-draws every mountain at its real height, read a grid at a time from `Earth::region`.
+An Earth world has the true heights, from Y -16384 to 16383, as Earth Platform's cubic chunks do. Horizon keeps
+its 384-block chunk columns (`crate::chunk::HEIGHT`), but on an Earth world they are a moving window onto those
+heights. `crate::chunk::min_y()` is set at run time: the window starts 192 blocks below the player, rounded down to
+a whole cube. When the player comes within 64 blocks of the window's top or bottom, the level is saved and opened
+again centred on them (`crates/horizon-client/src/game/earth_window.rs`), and the player waits in place until the
+cubes around them are lit. This matches Earth Platform keeping a band of cubes loaded around the player (12 out,
+6 up and down). Every other world type keeps vanilla's fixed Y -64 to 320.
 
-`crates/horizon-client/src/earthgen.rs` is the generator: each section is a cube from `horizon_earth::cube`, with
-a bedrock floor at Y -64. Caves, trees and the rest of the decoration come with stage 8.
+Saves are tall: a chunk's record in the region files keeps the sections, block entities and entities it holds at
+other heights, so what you build at the summit of Everest is there when you come back down and up again. A section
+outside a signed byte writes its `Y` as an Int. Light is worked out again on load, and sections the record never
+saved are generated. Far terrain (`crate::lod`) has no window and draws every mountain at its real height, read a
+grid at a time from `Earth::region`.
+
+Weather follows Earth Platform's CubicWeather: vanilla's cooling with height above Y 80 is skipped, so it rains on
+a warm mountain and snows only in cold biomes. Clouds sit 129 blocks above the window's middle.
+
+Known limits for now:
+
+- Each window move reloads the level, so there is a short hitch, far terrain is redrawn, mobs are saved and loaded
+  again, and the player's speed resets.
+- Dedicated servers and LAN don't follow the window yet, so Earth worlds are single player.
+- Sky light enters at the window's top, so a deep cave under a mountain more than about 190 blocks tall is lit.
+- Clouds move in 64-block steps with the window.
+- Worlds made before the window keep their old `shift`, which still works.
+
+`crates/horizon-client/src/earthgen.rs` is the generator: each section is a cube from `horizon_earth::cube`. Caves, trees and the rest of the decoration come with stage 8.
 
 ## Next: the cubic engine
 
 Horizon's world today is vanilla's: chunk columns of 24 sections from Y -64 to 320 (`crate::chunk::HEIGHT`),
 saved in Anvil region files and sent in vanilla's packets. An Earth world needs cubes instead, as Earth Platform
-built them. The stages, each its own pull request:
+built them. The moving window above already covers stage 1's vertical band and stage 4's saving, on top of
+Horizon's own chunks. The stages, each its own pull request:
 
 1. **Cube storage and generation**: a cube store keyed by cube position next to the chunk map, a
    `CubeGenerator` that streams cubes nearest first in a horizontal circle and a vertical band (Earth Platform's

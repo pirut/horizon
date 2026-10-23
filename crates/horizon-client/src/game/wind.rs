@@ -146,7 +146,7 @@ impl Game<'_> {
             .get("minecraft:blocks_wind_charge_explosions")
             .cloned()
             .unwrap_or_default();
-        let (min_y, max_y) = (horizon_client::chunk::MIN_Y, 320);
+        let (min_y, max_y) = (horizon_client::chunk::min_y(), 320);
         let mut set: BTreeSet<[i32; 3]> = BTreeSet::new();
         for xx in 0..16 {
             for yy in 0..16 {

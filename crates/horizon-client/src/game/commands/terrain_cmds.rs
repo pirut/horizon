@@ -1,7 +1,7 @@
 //! `/forceload`, `/fillbiome`, `/worldborder` and `/loot`.
 use super::{Arg, Context, Game, R, Target, err, items::Owner};
 use horizon_client::{
-    chunk::{HEIGHT, MIN_Y},
+    chunk::{HEIGHT, min_y},
     command::CommandError,
     items::ItemStack,
     scoreboard_cmd::{Holder, Tracker},
@@ -210,7 +210,7 @@ impl Game<'_> {
                     if usize::from(current) == target {
                         continue;
                     }
-                    let qy = ((y - MIN_Y) >> 2).clamp(0, HEIGHT / 4 - 1);
+                    let qy = ((y - min_y()) >> 2).clamp(0, HEIGHT / 4 - 1);
                     if let Some(chunk) = self.world.chunks.get_mut(&key) {
                         let chunk = std::sync::Arc::make_mut(chunk);
                         chunk.set_biome_cell((x & 15) >> 2, qy, (z & 15) >> 2, target as u16);

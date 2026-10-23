@@ -3,7 +3,7 @@
 //! then the play state (login, chunks with light, player list, entities,
 //! block changes). Needs the prepared resources; skipped without them.
 use horizon_client::{
-    chunk::{Chunk, MIN_Y},
+    chunk::{Chunk, VANILLA_MIN_Y as MIN_Y},
     lan::{
         Lan,
         chunks::ChunkEncoder,

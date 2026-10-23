@@ -16,7 +16,7 @@
 use crate::{
     Result,
     biome::Biomes,
-    chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section, block_strategy},
+    chunk::{BIOME_STRATEGY, Chunk, Light, SECTIONS, Section, block_strategy, min_y},
     streaming::ChunkGenerator,
 };
 use horizon_core::{
@@ -693,7 +693,7 @@ struct HeightmapView<'a> {
 impl HeightmapChunk for HeightmapView<'_> {
     type State = crate::assets::StateFacts;
     fn min_y(&self) -> i32 {
-        MIN_Y
+        min_y()
     }
     fn height(&self) -> i32 {
         SECTIONS as i32 * 16
@@ -704,11 +704,11 @@ impl HeightmapChunk for HeightmapView<'_> {
             .iter()
             .rposition(|s| !s.is_uniform(self.tables.air))
             .unwrap_or(0);
-        MIN_Y + top as i32 * 16
+        min_y() + top as i32 * 16
     }
     fn block_state(&self, x: i32, y: i32, z: i32) -> Self::State {
         // Chunk.get: no block outside the sections.
-        let state = usize::try_from((y - MIN_Y) >> 4)
+        let state = usize::try_from((y - min_y()) >> 4)
             .ok()
             .and_then(|s| self.sections.get(s))
             .map_or(0, |s| s.get(crate::chunk::index(x, y, z)));
@@ -725,7 +725,7 @@ fn heightmaps(chunk: &Chunk, tables: &SaveTables) -> Tag {
     ];
     let mut maps: Vec<Heightmap> = kinds
         .iter()
-        .filter_map(|k| Heightmap::new(*k, MIN_Y, SECTIONS as i32 * 16).ok())
+        .filter_map(|k| Heightmap::new(*k, min_y(), SECTIONS as i32 * 16).ok())
         .collect();
     let view = HeightmapView {
         sections: &chunk.sections,
@@ -746,7 +746,7 @@ fn heightmaps(chunk: &Chunk, tables: &SaveTables) -> Tag {
 /// sendToClient: WORLD_SURFACE, MOTION_BLOCKING, MOTION_BLOCKING_NO_LEAVES),
 /// as (network id, packed longs) in Heightmap.Types order.
 pub fn client_heightmaps(chunk: &Chunk, tables: &SaveTables) -> Vec<(i32, Vec<i64>)> {
-    client_heightmaps_in(&chunk.sections, tables, MIN_Y, SECTIONS as i32 * 16)
+    client_heightmaps_in(&chunk.sections, tables, min_y(), SECTIONS as i32 * 16)
 }
 /// The client heightmaps of a column's sections, in a level from `min_y`,
 /// `height` blocks high.
@@ -812,7 +812,7 @@ pub fn encode_with(
         Light::Full(a) => a.iter().any(|v| v >> 4 != 15),
     });
     for (si, section) in chunk.sections.iter().enumerate() {
-        let y = (MIN_Y >> 4) + si as i32;
+        let y = (min_y() >> 4) + si as i32;
         // PalettedContainer.pack: distinct states in index order, indices at
         // the saved width.
         let packed = section.blocks.pack();
@@ -864,7 +864,8 @@ pub fn encode_with(
             ));
         }
         let mut entries = vec![
-            ("Y", Tag::Byte(y as i8)),
+            // An Earth world's sections go past a byte's reach (docs/earth.md).
+            ("Y", i8::try_from(y).map_or(Tag::Int(y), Tag::Byte)),
             ("block_states", Tag::compound(states)),
             ("biomes", Tag::compound(biome_tag)),
         ];
@@ -942,7 +943,7 @@ pub fn encode_with(
         ("DataVersion", Tag::Int(DATA_VERSION)),
         ("xPos", Tag::Int(chunk.x)),
         ("zPos", Tag::Int(chunk.z)),
-        ("yPos", Tag::Int(MIN_Y >> 4)),
+        ("yPos", Tag::Int(min_y() >> 4)),
         ("Status", string("minecraft:full")),
         ("LastUpdate", Tag::Long(extras.map_or(0, |e| e.last_update))),
         ("isLightOn", Tag::Byte(i8::from(chunk.lit))),
@@ -1061,7 +1062,7 @@ fn decode_column(
         let Some(y) = number(section.get("Y")) else {
             continue;
         };
-        let si = y as i32 - (MIN_Y >> 4);
+        let si = y as i32 - (min_y() >> 4);
         if !(0..SECTIONS as i32).contains(&si) {
             continue;
         }
@@ -1205,7 +1206,7 @@ pub fn encode_proto(
     // ProtoChunk.postProcessing: one list per section, packed section offsets.
     let mut marks = vec![Vec::new(); SECTIONS];
     for &[x, y, z] in &proto.column.postprocess {
-        if let Some(list) = marks.get_mut(((y - MIN_Y) >> 4) as usize) {
+        if let Some(list) = marks.get_mut(((y - min_y()) >> 4) as usize) {
             list.push(Tag::Short(
                 ((x & 15) | (y & 15) << 4 | (z & 15) << 8) as i16,
             ));
@@ -1240,7 +1241,7 @@ pub fn decode_proto(
     }
     let mut column = decode_column(root, registry, biomes, tables)?;
     column.block_entities.clear();
-    let base = number(root.tag.get("yPos")).map_or(MIN_Y, |y| y as i32 * 16);
+    let base = number(root.tag.get("yPos")).map_or(min_y(), |y| y as i32 * 16);
     if let Some(Tag::List(sections)) = root.tag.get("PostProcessing") {
         for (si, marks) in sections.iter().enumerate() {
             let Tag::List(marks) = marks else {
@@ -1287,7 +1288,7 @@ pub fn load_light(tag: &Tag, chunk: &mut Chunk, sky_light: bool) {
         let Some(y) = number(section.get("Y")) else {
             continue;
         };
-        let si = y as i32 - (MIN_Y >> 4);
+        let si = y as i32 - (min_y() >> 4);
         if !(0..SECTIONS as i32).contains(&si) {
             continue;
         }
@@ -1504,6 +1505,9 @@ pub struct SaveDir {
     pub tables: OnceLock<Arc<SaveTables>>,
     /// False in dimensions without skylight (no SkyLight layers are written).
     pub sky_light: bool,
+    /// An Earth world: the loaded window is part of each column's height, so a
+    /// save keeps what the records hold at other heights ([`keep_outside`]).
+    pub tall: bool,
 }
 impl SaveDir {
     pub fn new(root: PathBuf) -> Self {
@@ -1518,6 +1522,7 @@ impl SaveDir {
             outstanding: Default::default(),
             tables: OnceLock::new(),
             sky_light,
+            tall: false,
         }
     }
     fn region_path(&self, folder: &str, rx: i32, rz: i32) -> PathBuf {
@@ -1548,8 +1553,69 @@ impl SaveDir {
         let root = self.read_record("region", x, z)?;
         let tables = self.tables.get().map(|t| &**t);
         let mut chunk = decode_with(&root, registry, biomes, tables)?;
-        load_light(&root.tag, &mut chunk, self.sky_light);
+        // A tall world's light is worked out again: its record's layers come
+        // from windows other than this one.
+        if !self.tall {
+            load_light(&root.tag, &mut chunk, self.sky_light);
+        }
         Some(chunk)
+    }
+    /// The loaded window's sections the chunk's record holds, as a mask by
+    /// section index (a tall world's record may hold only some of them).
+    pub fn saved_sections(&self, x: i32, z: i32) -> u32 {
+        let Some(root) = self.read_record("region", x, z) else {
+            return 0;
+        };
+        let Some(Tag::List(sections)) = root.tag.get("sections") else {
+            return 0;
+        };
+        sections
+            .iter()
+            .filter_map(|s| number(s.get("Y")))
+            .map(|y| y as i32 - (min_y() >> 4))
+            .filter(|si| (0..SECTIONS as i32).contains(si))
+            .fold(0, |mask, si| mask | 1 << si)
+    }
+    /// A tall world's records, each with what its old record holds outside
+    /// the loaded window, queued as tags (encoded now: the window may move
+    /// before the writer runs).
+    fn tall_records(
+        &self,
+        entities: bool,
+        records: Vec<((i32, i32), Option<NamedTag>)>,
+    ) -> Vec<((i32, i32), Record)> {
+        let folder = if entities { "entities" } else { "region" };
+        records
+            .into_iter()
+            .map(|(key, tag)| {
+                let old = self.read_record(folder, key.0, key.1);
+                let tag = match (tag, old) {
+                    (Some(mut new), Some(old)) => {
+                        keep_outside(&old.tag, &mut new.tag, entities);
+                        Some(new)
+                    }
+                    (None, Some(old)) => {
+                        // Nothing in the window: the record keeps the rest.
+                        let mut rest = old.clone();
+                        for list in WINDOWED {
+                            if let Some(Tag::List(items)) = rest.tag.get_mut(list) {
+                                items.clear();
+                            }
+                        }
+                        keep_outside(&old.tag, &mut rest.tag, entities);
+                        let list = if entities { "Entities" } else { "sections" };
+                        let empty =
+                            !matches!(rest.tag.get(list), Some(Tag::List(l)) if !l.is_empty());
+                        (!empty).then_some(rest)
+                    }
+                    (tag, None) => tag,
+                };
+                (
+                    key,
+                    tag.map_or(Record::Delete, |t| Record::Tag(Arc::new(t))),
+                )
+            })
+            .collect()
     }
     /// A proto chunk saved before it became final (`decode_proto`).
     pub fn load_proto(
@@ -1743,7 +1809,7 @@ impl SaveDir {
         biomes: &Biomes,
     ) -> Result<usize> {
         let tables = self.tables.get().map(|t| &**t);
-        let records = chunks
+        let records: Vec<_> = chunks
             .iter()
             .map(|c| {
                 (
@@ -1752,6 +1818,11 @@ impl SaveDir {
                 )
             })
             .collect();
+        if self.tall {
+            let records = self.tall_records(false, records);
+            self.queue(false, records, true)?;
+            return Ok(chunks.len());
+        }
         self.write_records("region", records, true)?;
         Ok(chunks.len())
     }
@@ -1763,6 +1834,19 @@ impl SaveDir {
         registry: &'static BlockRegistry,
         biomes: &Arc<Biomes>,
     ) -> Result<usize> {
+        if self.tall {
+            let tables = self.tables.get().map(|t| &**t);
+            let records = chunks
+                .iter()
+                .map(|c| {
+                    let tag = encode_with(c, registry, biomes, tables, self.sky_light);
+                    ((c.x, c.z), Some(tag))
+                })
+                .collect();
+            let records = self.tall_records(false, records);
+            self.queue(false, records, false)?;
+            return Ok(chunks.len());
+        }
         let encoding = Arc::new(Encoding {
             registry,
             biomes: biomes.clone(),
@@ -1799,7 +1883,50 @@ impl SaveDir {
                 ((x, z), tag)
             })
             .collect();
+        if self.tall {
+            let records = self.tall_records(true, records);
+            return self.queue(true, records, wait);
+        }
         self.write_records("entities", records, wait)
+    }
+}
+
+/// The lists of a record that hold things at a height.
+const WINDOWED: [&str; 3] = ["sections", "block_entities", "Entities"];
+/// Appends to `new`'s sections, block entities and entities (an entity
+/// record's, with `entities`) those of `old` outside the loaded window.
+fn keep_outside(old: &Tag, new: &mut Tag, entities: bool) {
+    let (lo, hi) = (min_y(), min_y() + SECTIONS as i32 * 16);
+    let outside = |y: i64| !(i64::from(lo)..i64::from(hi)).contains(&y);
+    let mut keep = |list: &str, y: &dyn Fn(&Tag) -> Option<i64>| {
+        let Some(Tag::List(items)) = old.get(list) else {
+            return;
+        };
+        let kept: Vec<Tag> = items
+            .iter()
+            .filter(|t| y(t).is_some_and(outside))
+            .cloned()
+            .collect();
+        if kept.is_empty() {
+            return;
+        }
+        match new.get_mut(list) {
+            Some(Tag::List(items)) => items.extend(kept),
+            _ => {
+                if let Tag::Compound(map) = new {
+                    map.insert(list.into(), Tag::List(kept));
+                }
+            }
+        }
+    };
+    if entities {
+        keep("Entities", &|e| match e.get("Pos") {
+            Some(Tag::List(pos)) => number(pos.get(1)),
+            _ => None,
+        });
+    } else {
+        keep("sections", &|s| number(s.get("Y")).map(|y| y * 16));
+        keep("block_entities", &|b| number(b.get("y")));
     }
 }
 
@@ -2894,6 +3021,10 @@ struct SavedLodSampler<G: ChunkGenerator> {
 }
 impl<G: ChunkGenerator> SavedLodSampler<G> {
     fn saved_columns(&mut self, key: (i32, i32)) -> Option<LodSurfaces> {
+        // A tall world's records hold some heights only: its far terrain is the generator's.
+        if self.generator.save.tall {
+            return None;
+        }
         let cached = match self.cache.iter().position(|(at, _)| *at == key) {
             Some(index) => self.cache.remove(index).unwrap(),
             None => (
@@ -3017,7 +3148,7 @@ fn lod_light_layers(sections: &[(i32, &Tag)], sky_light: bool) -> Box<[u8]> {
             Some(Tag::ByteArray(data)) if data.len() == 2048 => Some(&data[..]),
             _ => None,
         };
-        layers[(y - (MIN_Y >> 4)) as usize] = (
+        layers[(y - (min_y() >> 4)) as usize] = (
             if sky_light { layer("SkyLight") } else { None },
             layer("BlockLight"),
         );
@@ -3071,7 +3202,7 @@ fn decode_lod_surfaces(
         .iter()
         .filter_map(|section| {
             let y = number(section.get("Y"))? as i32;
-            (MIN_Y >> 4..(MIN_Y >> 4) + SECTIONS as i32)
+            (min_y() >> 4..(min_y() >> 4) + SECTIONS as i32)
                 .contains(&y)
                 .then_some((y, section))
         })
@@ -3163,7 +3294,7 @@ fn decode_lod_surfaces(
                                 });
                             }
                         }
-                        let light = lod_face_light(&light, x, (height - 1 - MIN_Y) as usize, z);
+                        let light = lod_face_light(&light, x, (height - 1 - min_y()) as usize, z);
                         let min = (height - 1) as i16;
                         let max = height as i16;
                         if let Some(previous) = column.spans.last_mut()
@@ -3246,6 +3377,10 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
             .tables
             .get_or_init(|| Arc::new(SaveTables::new(&self.registry)));
         let mut chunk = self.save.load(x, z, self.registry.registry, &self.biomes)?;
+        if self.save.tall {
+            self.inner
+                .fill_unsaved(&mut chunk, self.save.saved_sections(x, z));
+        }
         for s in &mut chunk.sections {
             Arc::make_mut(s).compact();
         }
@@ -3346,12 +3481,12 @@ mod tests {
         chunk.lit = true;
         let mut cave_light = Box::new([0x03; 4096]);
         cave_light[crate::chunk::index(12, 125, 11)] = 0xa7;
-        Arc::make_mut(&mut chunk.sections[((121 - MIN_Y) >> 4) as usize]).light =
+        Arc::make_mut(&mut chunk.sections[((121 - min_y()) >> 4) as usize]).light =
             Light::Full(cave_light);
         chunk.set(7, 90, 9, sand.0);
         chunk.set(7, 98, 9, leaves.0);
         let forest = biomes.id("minecraft:forest");
-        chunk.set_biome_cell(7 / 4, (98 - MIN_Y) / 4, 9 / 4, forest);
+        chunk.set_biome_cell(7 / 4, (98 - min_y()) / 4, 9 / 4, forest);
         chunk.set(4, 54, 4, sand.0);
         for y in 55..64 {
             chunk.set(4, y, 4, water.0);
@@ -3643,6 +3778,65 @@ mod tests {
         super::upgrade_older_world(&dir).unwrap();
         assert_eq!(version(&dir), Some(i64::from(super::DATA_VERSION)));
         super::upgrade_older_world(&dir).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn tall_saves_keep_what_records_hold_at_other_heights() {
+        let dir = std::env::temp_dir().join(format!("horizon-tall-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut save = super::SaveDir::new(dir.clone());
+        save.tall = true;
+        let entity = |y: f64| {
+            Tag::compound([(
+                "Pos",
+                Tag::List(vec![
+                    Tag::Double(0.5f64.to_bits()),
+                    Tag::Double(y.to_bits()),
+                    Tag::Double(0.5f64.to_bits()),
+                ]),
+            )])
+        };
+        // The window is vanilla's in tests: Y -64 to 319.
+        save.save_entities(vec![((3, -2), vec![entity(700.0), entity(10.0)])])
+            .unwrap();
+        save.save_entities(vec![((3, -2), vec![entity(20.0)])])
+            .unwrap();
+        assert_eq!(save.load_entities(3, -2), vec![entity(20.0), entity(700.0)]);
+        // Nothing left in the window: the record keeps the rest.
+        save.save_entities(vec![((3, -2), Vec::new())]).unwrap();
+        assert_eq!(save.load_entities(3, -2), vec![entity(700.0)]);
+
+        let section =
+            |y: i32| Tag::compound([("Y", i8::try_from(y).map_or(Tag::Int(y), Tag::Byte))]);
+        let block = |y: i32| Tag::compound([("y", Tag::Int(y))]);
+        let old = Tag::compound([
+            (
+                "sections",
+                Tag::List(vec![section(-4), section(19), section(20), section(300)]),
+            ),
+            (
+                "block_entities",
+                Tag::List(vec![block(5), block(4800), block(-65)]),
+            ),
+        ]);
+        let mut new = Tag::compound([
+            ("sections", Tag::List(vec![section(-4), section(19)])),
+            ("block_entities", Tag::List(vec![block(6)])),
+        ]);
+        super::keep_outside(&old, &mut new, false);
+        assert_eq!(
+            new.get("sections"),
+            Some(&Tag::List(vec![
+                section(-4),
+                section(19),
+                section(20),
+                section(300)
+            ]))
+        );
+        assert_eq!(
+            new.get("block_entities"),
+            Some(&Tag::List(vec![block(6), block(4800), block(-65)]))
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
     #[test]

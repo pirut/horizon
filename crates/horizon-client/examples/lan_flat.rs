@@ -4,7 +4,7 @@
 use horizon_client::{
     assets::Assets,
     blocks::BlockFacts,
-    chunk::{Chunk, MIN_Y},
+    chunk::{Chunk, VANILLA_MIN_Y as MIN_Y},
     lan::{
         Lan,
         chunks::ChunkEncoder,

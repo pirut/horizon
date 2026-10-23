@@ -408,7 +408,7 @@ impl FluidInteractionWorld for TntFluidWorld<'_> {
         static SECTIONS: [bool; horizon_client::chunk::SECTIONS] =
             [true; horizon_client::chunk::SECTIONS];
         Ok(FluidSections {
-            minimum_section_y: horizon_client::chunk::MIN_Y / 16,
+            minimum_section_y: horizon_client::chunk::min_y() / 16,
             has_fluid: &SECTIONS,
         })
     }

@@ -3057,7 +3057,7 @@ impl Renderer {
                 let scheduled = (i + count - self.translucency_cursor) % count < budget;
                 let origin = [
                     v.key.0 * 16,
-                    crate::chunk::MIN_Y + v.key.1 * 16,
+                    crate::chunk::min_y() + v.key.1 * 16,
                     v.key.2 * 16,
                 ];
                 if (!s.sort.is_sorted() || nearby || scheduled)
@@ -4058,7 +4058,7 @@ enum Pack {
 fn camera_section(camera: DVec3) -> SectionKey {
     (
         (camera.x.floor() as i32) >> 4,
-        (camera.y.floor() as i32 - crate::chunk::MIN_Y) >> 4,
+        (camera.y.floor() as i32 - crate::chunk::min_y()) >> 4,
         (camera.z.floor() as i32) >> 4,
     )
 }

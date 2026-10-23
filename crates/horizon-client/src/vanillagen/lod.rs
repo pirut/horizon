@@ -233,8 +233,8 @@ fn decorated_region(
 fn columns(chunk: &ProtoChunk, biome_map: &[u16], dimension: &str) -> Arc<[Column; 256]> {
     let states = chunk.data().block_states();
     let registry = chunk.data().registry();
-    let min = chunk.terrain.min_y().max(MIN_Y);
-    let max = (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT);
+    let min = chunk.terrain.min_y().max(min_y());
+    let max = (chunk.terrain.min_y() + chunk.terrain.height()).min(min_y() + HEIGHT);
     Arc::new(std::array::from_fn(|index| {
         let x = (index & 15) as i32;
         let z = (index >> 4) as i32;
@@ -273,7 +273,7 @@ fn columns(chunk: &ProtoChunk, biome_map: &[u16], dimension: &str) -> Arc<[Colum
             });
             if fluid {
                 let surface = column.surface.get_or_insert(Surface {
-                    height: MIN_Y,
+                    height: min_y(),
                     state: BlockStateId(0),
                     water: None,
                     biome,
