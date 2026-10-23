@@ -25,6 +25,10 @@ try:
 except ImportError:
     import lab
     import test_rust_parity as base
+try:
+    from .macho_align import align_string_pool
+except ImportError:
+    from macho_align import align_string_pool
 
 ROOT = lab.ROOT
 SOURCE = ROOT / "mods/horizon-accel/src"
@@ -78,7 +82,9 @@ def natives(targets):
             continue
         subprocess.run(["cargo", "zigbuild", "--release", "-q", "-p", "horizon-accel", "--target", target],
                        check=True, cwd=ROOT)
-        built[f"natives/{folder}/{name}"] = (lab.cargo_target() / target / "release" / name).read_bytes()
+        library = (lab.cargo_target() / target / "release" / name).read_bytes()
+        # zig can leave the string pool 4-byte aligned, which macOS 27's dyld refuses to load.
+        built[f"natives/{folder}/{name}"] = align_string_pool(library) if "apple" in target else library
     return built
 
 
