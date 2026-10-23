@@ -1,13 +1,15 @@
 """tools/macho_align.py: the string pool moves to an 8-byte boundary and the ad-hoc signature still matches."""
 
 import hashlib
+import importlib.util
 from pathlib import Path
 import struct
-import sys
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-import macho_align  # noqa: E402
+# Loaded by path: putting tools/ on sys.path would shadow the tests that share a name with a tool.
+_SPEC = importlib.util.spec_from_file_location("macho_align", Path(__file__).resolve().parents[1] / "tools/macho_align.py")
+macho_align = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(macho_align)
 
 PAGE_SHIFT = 12
 
